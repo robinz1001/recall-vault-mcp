@@ -1,6 +1,6 @@
 {
   "name": "recall-vault-mcp",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "跨会话跨项目本地记忆 MCP server — flexsearch BM25 + TF-IDF 三路混合检索，双时钟事实管理，自动 Hook 链路。零 native 依赖，纯 Markdown vault。",
   "type": "module",
   "bin": {
@@ -19,7 +19,7 @@
   "bugs": {
     "url": "https://github.com/robinz1001/recall-vault-mcp/issues"
   },
-  "author": "",
+  "author": "robinz1001",
   "scripts": {
     "build": "tsc",
     "prepare": "npm run build",
@@ -65,8 +65,12 @@
     "scripts/hook-stop.mjs",
     "scripts/hook-post-tool.mjs",
     "INSTALL.md",
-    "README.md"
+    "README.md",
+    "server.json"
   ],
+  "mcpPackage": {
+    "repository": "github.com/robinz1001/recall-vault-mcp"
+  },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.4.0",
     "flexsearch": "^0.8.212",
