@@ -37,7 +37,7 @@
 
 ## 项目特定信息
 
-- **vault_path**: `${workspaceFolder}`（就是项目根，没有嵌套层）
+- **vault_path**: `~/.recall-vault/`（全局统一 vault，所有 IDE、所有项目共享，通过 `projects/<project_id>/` 子目录区分）
 - **目录结构**: projects/recall-vault/episodic/、projects/recall-vault/semantic/、shared/semantic/
 - **CLI 脚本**: `node scripts/cli.mjs <subcommand>` 可手动操作，也可作为 MCP 不可用时的 fallback
 - **MCP 健康检查**: `health_check` tool 能确认服务状态，`doctor` 子命令能诊断配置问题

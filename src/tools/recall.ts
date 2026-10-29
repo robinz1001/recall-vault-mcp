@@ -35,6 +35,8 @@ export interface RecallArgs {
   limit?: number;
   sort_by?: RecallSortBy;
   context_window_size?: number;
+  /** Phase MCP: 极简模式 — 只返回搜索定位信息，让 agent 自己读 Markdown 文件。省 ~80% recall 输出 token */
+  compact?: boolean;
 }
 
 export interface RecallResultItem {
@@ -68,14 +70,32 @@ export interface RecallResult {
   results: RecallResultItem[];
   total: number;
   included_shared: boolean;
+  /** Phase D: token 预算提示 — 让 agent 知道这次 recall 花了多少 token */
+  token_budget_hint?: {
+    results_est_tokens: number;
+    window_size?: number;
+    window_usage_pct?: number;
+    limit_adaptive?: boolean; // true=系统自适应, false=agent 显式指定
+  };
 }
 
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 50;
 
+/** 根据 context_window_size 自适应推荐 limit（agent 没显式指定时用） */
+function adaptiveLimit(windowSize?: number): number {
+  if (!windowSize) return DEFAULT_LIMIT;
+  if (windowSize <= 16_000) return 5;   // 小窗口：最多 5 条
+  if (windowSize <= 32_000) return 8;   // 中窗口：最多 8 条
+  if (windowSize <= 64_000) return 12;  // 大窗口：最多 12 条
+  return 20;                            // 超大窗口：最多 20 条
+}
+
 export async function recall(args: RecallArgs): Promise<RecallResult> {
   const vault = new VaultManager();
-  const limit = Math.min(Math.max(args.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
+  const agentSpecifiedLimit = args.limit !== undefined;
+  const baseLimit = args.limit ?? adaptiveLimit(args.context_window_size);
+  const limit = Math.min(Math.max(baseLimit, 1), MAX_LIMIT);
   const sortBy: RecallSortBy = args.sort_by ?? 'relevance';
 
   // === Step 1: 确定搜索范围 ===
@@ -110,10 +130,21 @@ export async function recall(args: RecallArgs): Promise<RecallResult> {
 
   logger.info('Recall:', args.query ? `"${args.query}"` : '(no query)', '→', results.length, 'results (total scanned:', candidates.length, ')');
 
+  const results_est_tokens = results.reduce((acc, r) => acc + r.est_tokens, 0);
+  const token_budget_hint = args.context_window_size
+    ? {
+        results_est_tokens,
+        window_size: args.context_window_size,
+        window_usage_pct: Number(((results_est_tokens / args.context_window_size) * 100).toFixed(1)),
+        limit_adaptive: !agentSpecifiedLimit,
+      }
+    : undefined;
+
   return {
     results,
     total: candidates.length,
     included_shared: includedShared,
+    ...(token_budget_hint ? { token_budget_hint } : {}),
   };
 }
 

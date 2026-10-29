@@ -45,6 +45,17 @@ Call recall with include_shared=true:
 - **When debugging** — "what caused similar issues last time?"
 - **When the user says "before" or "previously"** — they expect context continuity
 
+## ⚡ TOKEN-SAVING PATTERN (critical for large vaults)
+
+recall() has a compact mode that saves ~80% tokens. Use it as default:
+  recall({ query: "bug fix", compact: true })  ← 极简：只有 id/score/wikilink
+  recall({ query: "bug fix" })                  ← 默认：带 snippet + 完整元数据
+
+agent 拿到 compact results 后，用 wikilink [[projects/.../memory_id]] 直接打开 Markdown 文件看完整内容。
+IDE 原生支持点击 Markdown 链接。
+
+When your context_window_size is small (≤32K), ALWAYS use compact mode.
+
 ## Output rules
 
 - recall results: cite the source path on every fact. Show score + snippet so the user can verify.
@@ -81,11 +92,9 @@ export function createServer(): McpServer {
       const vault = new VaultManager();
       const dirsOk = await directoryHealth(vault);
 
-      // Yggdrasil-style: seed context on session start — last 5 semantic + newest episodic
+      // Phase B: Yggdrasil-style seed context + 300 token 压缩摘要
       let suggested_context: any = null;
       try {
-        const recent: any[] = [];
-        // 复用 walkMdFiles + readMemory 直接读最新记忆（不用 listMemories，它不带 content）
         const { walkMdFiles } = await import('./tools/_walk.js');
         const { readMemory } = await import('./storage/frontmatter.js');
         const entries: any[] = [];
@@ -93,40 +102,96 @@ export function createServer(): McpServer {
           const entry = await readMemory(fp);
           if (!entry) continue;
           if (entry.meta.archived) continue;
+          if (entry.meta.valid_to) continue; // superseded 不进摘要
           entries.push(entry);
         }
-        entries.sort((a, b) => new Date(b.meta.updated_at).getTime() - new Date(a.meta.updated_at).getTime());
+        // priority DESC + updated_at DESC
+        entries.sort((a, b) => {
+          const pDiff = (b.meta.priority ?? 2) - (a.meta.priority ?? 2);
+          if (pDiff !== 0) return pDiff;
+          return new Date(b.meta.updated_at).getTime() - new Date(a.meta.updated_at).getTime();
+        });
 
-        const semanticRecent = entries.filter((e) => e.meta.memory_type === 'semantic').slice(0, 5);
-        const episodicLatest = entries.find((e) => e.meta.memory_type === 'episodic');
+        const allSemantic = entries.filter((e) => e.meta.memory_type === 'semantic');
+        const allEpisodic = entries.filter((e) => e.meta.memory_type === 'episodic');
+        const highValueCount = allSemantic.filter((e) => e.meta.priority === 3).length;
 
-        const bundle: any[] = semanticRecent.map((e) => ({
+        const topSemantic = allSemantic.slice(0, 3);
+        const latestEpisodic = allEpisodic[0] ?? null;
+
+        // Vault token 总预算估算（agent 用来判断要不要先过滤再 recall）
+        const vaultTokenBudget = {
+          total: entries.reduce((s, e) => s + estimateTokens(e.body), 0),
+          semantic: allSemantic.reduce((s, e) => s + estimateTokens(e.body), 0),
+          episodic: allEpisodic.reduce((s, e) => s + estimateTokens(e.body), 0),
+          high_value: allSemantic.filter((e) => e.meta.priority === 3).reduce((s, e) => s + estimateTokens(e.body), 0),
+        };
+
+        // 压缩摘要文本（~300 token）
+        const compactedLines: string[] = [];
+        for (const e of topSemantic) {
+          const title = extractTitle(e.body);
+          const snippet = cleanBodySnippet(e.body, 120);
+          const star = e.meta.priority === 3 ? ' ⚠️' : '';
+          const age = ageLabel(e.meta.updated_at);
+          const tags = (e.meta.tags ?? []).slice(0, 3).map((t: string) => `#${t}`).join(' ');
+          compactedLines.push(`📌 ${title}${star} (${age})${tags ? ' ' + tags : ''}`);
+          compactedLines.push(`   ${snippet}`);
+        }
+        if (latestEpisodic) {
+          const snippet = cleanBodySnippet(latestEpisodic.body, 100);
+          const age = ageLabel(latestEpisodic.meta.updated_at);
+          compactedLines.push(`📝 上session ${age}: ${snippet}`);
+        }
+        const compacted_summary = compactedLines.join('\n');
+
+        // 结构化 items（保留完整元数据供 agent 深挖）
+        const bundle: any[] = topSemantic.map((e) => ({
           id: e.meta.id,
           type: e.meta.memory_type,
           priority: e.meta.priority,
           tags: e.meta.tags ?? [],
           updated_at: e.meta.updated_at,
           path: e.path,
-          snippet: (e.body ?? '').slice(0, 200),
+          wikilink: formatWikilink(e),
         }));
-        if (episodicLatest) {
+        if (latestEpisodic) {
           bundle.push({
-            id: episodicLatest.meta.id,
+            id: latestEpisodic.meta.id,
             type: 'episodic',
-            session_id: episodicLatest.meta.session_id,
-            updated_at: episodicLatest.meta.updated_at,
-            path: episodicLatest.path,
-            snippet: (episodicLatest.body ?? '').slice(0, 200),
+            session_id: latestEpisodic.meta.session_id,
+            updated_at: latestEpisodic.meta.updated_at,
+            path: latestEpisodic.path,
+            wikilink: formatWikilink(latestEpisodic),
             note: 'Previous session context — consider whether the current task relates.',
           });
         }
+
         suggested_context = {
-          summary: `You have ${semanticRecent.length} recent semantic memories + ${episodicLatest ? 1 : 0} latest episodic. Read the files fully when relevant.`,
+          // 给 agent 直接用的压缩摘要（省一次 recall tool call）
+          compacted_summary,
+          est_tokens: estimateTokens(compacted_summary),
+          // Vault token 总预算
+          vault_token_budget: vaultTokenBudget,
+          // 结构化元数据
+          summary: `Vault: ${allSemantic.length} semantic + ${allEpisodic.length} episodic${highValueCount > 0 ? ` · ${highValueCount} high-value (priority=3)` : ''}`,
+          total_semantic: allSemantic.length,
+          total_episodic: allEpisodic.length,
+          high_value_count: highValueCount,
           count: bundle.length,
           items: bundle,
         };
       } catch {
-        suggested_context = { summary: 'No memories yet — this is a fresh vault.', count: 0, items: [] };
+        suggested_context = {
+          compacted_summary: null,
+          est_tokens: 0,
+          summary: 'No memories yet — this is a fresh vault.',
+          total_semantic: 0,
+          total_episodic: 0,
+          high_value_count: 0,
+          count: 0,
+          items: [],
+        };
       }
 
       const info = {
@@ -178,12 +243,10 @@ export function createServer(): McpServer {
           ...args,
           priority: args.priority as 1 | 2 | 3 | undefined,
         });
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify(result, null, 2),
-          }],
-        };
+        // 极简确认：保留 path（后续读文件）和 superseded（版本链追踪）
+        const compact: any = { ok: true, memory_id: result.memory_id, created: result.created, path: result.path };
+        if ((result as any).superseded) compact.superseded = (result as any).superseded;
+        return { content: [{ type: 'text', text: JSON.stringify(compact, null, 2) }] };
       } catch (err: any) {
         return { isError: true, content: [{ type: 'text', text: `remember failed: ${err.message}` }] };
       }
@@ -209,6 +272,7 @@ export function createServer(): McpServer {
         limit: z.number().min(1).max(50).optional().describe('Default 10.'),
         sort_by: z.enum(['relevance', 'priority', 'time_desc', 'time_asc']).optional().describe('Default relevance.'),
         context_window_size: z.number().optional().describe('Current agent context window size (tokens). Auto-adjusts recall granularity.'),
+        compact: z.boolean().optional().describe('Phase MCP: Minimal output. Returns only id/score/wikilink, no snippets. Saves ~80% tokens. Agent reads full Markdown files directly.'),
       }),
     },
     wrapHandler('recall', async (args) => {
@@ -217,7 +281,7 @@ export function createServer(): McpServer {
         return {
           content: [{
             type: 'text',
-            text: formatRecallOutput(result),
+            text: formatRecallOutput(result, args.compact ?? false),
           }],
         };
       } catch (err: any) {
@@ -239,6 +303,7 @@ export function createServer(): McpServer {
         limit: z.number().min(1).max(100).optional().describe('Default 50.'),
         offset: z.number().min(0).optional().describe('Pagination offset. Default 0.'),
         sort_by: z.enum(['time_desc', 'time_asc', 'priority']).optional().describe('Default time_desc.'),
+        compact: z.boolean().optional().describe('Phase MCP: Minimal output. Only id + type + priority, no extra fields.'),
       }),
     },
     wrapHandler('list_memories', async (args) => {
@@ -247,7 +312,7 @@ export function createServer(): McpServer {
         return {
           content: [{
             type: 'text',
-            text: formatListOutput(result),
+            text: formatListOutput(result, args.compact ?? false),
           }],
         };
       } catch (err: any) {
@@ -271,12 +336,8 @@ export function createServer(): McpServer {
     wrapHandler('archive_memory', async (args) => {
       try {
         const result = await archiveMemory(args);
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify(result, null, 2),
-          }],
-        };
+        const compact = { ok: true, memory_id: result.memory_id, archived: result.archived };
+        return { content: [{ type: 'text', text: JSON.stringify(compact, null, 2) }] };
       } catch (err: any) {
         return { isError: true, content: [{ type: 'text', text: `archive_memory failed: ${err.message}` }] };
       }
@@ -303,7 +364,9 @@ export function createServer(): McpServer {
     wrapHandler('update_memory', async (args) => {
       try {
         const result = await updateMemory({ ...args, priority: args.priority as 1 | 2 | 3 | undefined });
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        const compact: any = { ok: true, memory_id: result.memory_id };
+        if ((result as any).updated) compact.updated = (result as any).updated;
+        return { content: [{ type: 'text', text: JSON.stringify(compact, null, 2) }] };
       } catch (err: any) {
         return { isError: true, content: [{ type: 'text', text: `update_memory failed: ${err.message}` }] };
       }
@@ -324,7 +387,8 @@ export function createServer(): McpServer {
     wrapHandler('delete_memory', async (args) => {
       try {
         const result = await deleteMemory(args);
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        const compact = { ok: true, memory_id: result.memory_id, deleted: true };
+        return { content: [{ type: 'text', text: JSON.stringify(compact, null, 2) }] };
       } catch (err: any) {
         return { isError: true, content: [{ type: 'text', text: `delete_memory failed: ${err.message}` }] };
       }
@@ -346,7 +410,8 @@ export function createServer(): McpServer {
     wrapHandler('set_memory_priority', async (args) => {
       try {
         const result = await setPriority({ ...args, priority: args.priority as 1 | 2 | 3 });
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        const compact = { ok: true, memory_id: result.memory_id, priority: result.priority };
+        return { content: [{ type: 'text', text: JSON.stringify(compact, null, 2) }] };
       } catch (err: any) {
         return { isError: true, content: [{ type: 'text', text: `set_memory_priority failed: ${err.message}` }] };
       }
@@ -421,10 +486,30 @@ async function directoryHealth(vault: VaultManager): Promise<boolean> {
   }
 }
 
-function formatRecallOutput(result: Awaited<ReturnType<typeof recall>>): string {
-  const payload = {
+function formatRecallOutput(result: Awaited<ReturnType<typeof recall>>, compact = false): string {
+  const payload: any = {
     summary: `Found ${result.results.length} / ${result.total} memories${result.included_shared ? ' (includes shared layer)' : ''}`,
-    results: result.results.map((r, i) => ({
+    total: result.total,
+    result_count: result.results.length,
+    included_shared: result.included_shared,
+  };
+
+  if (compact) {
+    // 极简模式：agent 只需要定位到哪条记忆，内容自己读 Markdown 文件
+    payload.compact = true;
+    payload.results = result.results.map((r, i) => ({
+      rank: i + 1,
+      memory_id: r.memory_id,
+      title: r.title.slice(0, 50),
+      score: Number(r.relevance_score.toFixed(3)),
+      wikilink: r.wikilink,
+      priority: r.priority,
+      type: r.memory_type,
+      scope: r.scope,
+      est_tokens: r.est_tokens,
+    }));
+  } else {
+    payload.results = result.results.map((r, i) => ({
       rank: i + 1,
       title: r.title,
       memory_id: r.memory_id,
@@ -437,21 +522,36 @@ function formatRecallOutput(result: Awaited<ReturnType<typeof recall>>): string 
       snippet: r.snippet,
       wikilink: r.wikilink,
       est_tokens: r.est_tokens,
-      // Phase 2: 新鲜度信号
       staleness: r.staleness,
-      // Phase 2: 双时钟字段
       valid_from: r.valid_from,
       valid_to: r.valid_to,
       supersedes: r.supersedes,
-    })),
-  };
+    }));
+  }
+
+  // Phase D: token 预算提示
+  if (result.token_budget_hint) {
+    payload.token_budget_hint = result.token_budget_hint;
+    if (result.token_budget_hint.window_usage_pct && result.token_budget_hint.window_usage_pct > 20) {
+      payload.summary += ` ⚠️ Recall results alone use ${result.token_budget_hint.window_usage_pct}% of your context window — consider more specific queries.`;
+    }
+  }
   return JSON.stringify(payload, null, 2);
 }
 
-function formatListOutput(result: Awaited<ReturnType<typeof listMemories>>): string {
-  const payload = {
+function formatListOutput(result: Awaited<ReturnType<typeof listMemories>>, compact = false): string {
+  const payload: any = {
     summary: `Listing ${result.items.length} / ${result.total} memories`,
-    items: result.items.map((i) => ({
+  };
+  if (compact) {
+    payload.compact = true;
+    payload.items = result.items.map((i) => ({
+      memory_id: i.memory_id,
+      type: i.memory_type,
+      priority: i.priority,
+    }));
+  } else {
+    payload.items = result.items.map((i) => ({
       memory_id: i.memory_id,
       title: i.title,
       memory_type: i.memory_type,
@@ -460,7 +560,53 @@ function formatListOutput(result: Awaited<ReturnType<typeof listMemories>>): str
       archived: i.archived,
       tags: i.tags,
       updated_at: i.updated_at.slice(0, 10),
-    })),
-  };
+    }));
+  }
   return JSON.stringify(payload, null, 2);
+}
+
+// ==================== health_check 辅助函数 ====================
+
+function extractTitle(body: string): string {
+  const firstLine = body.split('\n').find((l) => l.trim().length > 0) ?? '';
+  const h1 = firstLine.match(/^#\s+(.+)/);
+  if (h1) return h1[1].trim();
+  return firstLine.slice(0, 60).trim();
+}
+
+/** 跳过 markdown 标题行的 body snippet */
+function cleanBodySnippet(body: string, maxLen: number): string {
+  const lines = body.split('\n').filter((l) => l.trim().length > 0);
+  const contentStart = lines.find((l) => !/^#+\s+/.test(l)) ?? lines[0] ?? '';
+  const cleaned = contentStart.replace(/\s+/g, ' ').trim();
+  return cleaned.length > maxLen ? cleaned.slice(0, maxLen) + '…' : cleaned;
+}
+
+function ageLabel(isoStr: string): string {
+  const ageMs = Date.now() - new Date(isoStr).getTime();
+  const ageMin = ageMs / 60000;
+  if (ageMin < 1) return '刚刚';
+  if (ageMin < 60) return `${Math.round(ageMin)}分钟前`;
+  const ageH = ageMin / 60;
+  if (ageH < 24) return `${Math.round(ageH)}小时前`;
+  const ageD = ageH / 24;
+  if (ageD < 30) return `${Math.round(ageD)}天前`;
+  return `${Math.round(ageD / 30)}月前`;
+}
+
+function estimateTokens(text: string): number {
+  let ascii = 0, cjk = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) < 128) ascii++; else cjk++;
+  }
+  return Math.ceil(ascii / 4 + cjk / 3);
+}
+
+function formatWikilink(e: any): string {
+  const scope = e.meta.scope;
+  if (scope === 'shared') {
+    return `[[shared/semantic/${e.meta.id}]]`;
+  }
+  const pid = e.meta.project_id ?? '';
+  return `[[projects/${pid}/${e.meta.memory_type}/${e.meta.id}]]`;
 }

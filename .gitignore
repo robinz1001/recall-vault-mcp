@@ -29,4 +29,9 @@ test-output*
 
 # IDE cache
 .trae-cn/
-.codebuddy/
+.cursor/
+
+# 本地工具产物
+agent-state/
+mcp-publisher.exe
+scripts/ide-configs/   # install-skills 已内联配置，ide-configs 目录是 dead code

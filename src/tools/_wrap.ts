@@ -34,6 +34,31 @@ interface JournalEntry {
 
 let _journalDir: string | null = null;
 
+/** 更新 agent-state/activity.json 的 last_remember_ts（成功 remember 后调用） */
+function markRememberActivity(): void {
+  try {
+    const vault = new VaultManager();
+    const stateDir = path.join(vault.root, 'agent-state');
+    if (!fs.existsSync(stateDir)) fs.mkdirSync(stateDir, { recursive: true });
+    const markerFile = path.join(stateDir, 'activity.json');
+
+    let marker: any = { activities: [], last_remember_ts: null };
+    if (fs.existsSync(markerFile)) {
+      try { marker = JSON.parse(fs.readFileSync(markerFile, 'utf-8')); } catch { /* keep default */ }
+    }
+    marker.last_remember_ts = new Date().toISOString();
+
+    // 清理超过 2 小时的旧 activity
+    const cutoff = Date.now() - 2 * 60 * 60 * 1000;
+    marker.activities = (marker.activities || []).filter((a: any) => {
+      const ageMs = Date.now() - new Date(a.ts).getTime();
+      return ageMs < 2 * 60 * 60 * 1000;
+    });
+
+    fs.writeFileSync(markerFile, JSON.stringify(marker, null, 2), 'utf-8');
+  } catch { /* fail-safe */ }
+}
+
 function getJournalDir(): string {
   if (!_journalDir) {
     const vault = new VaultManager();
@@ -152,6 +177,11 @@ export function wrapHandler<TArgs extends Record<string, unknown>, TResult>(
         ms,
         error: errorMsg,
       });
+
+      // Phase C: remember 类工具成功后，更新 activity marker
+      if (status === 'ok' && isMemoryWriteTool(toolName)) {
+        markRememberActivity();
+      }
     }
 
     // backlog 提醒（只在 ok 时注入）
@@ -190,4 +220,13 @@ export function resetJournalDir(): void {
     }
   } catch { /* ignore */ }
   _journalDir = null;
+}
+
+/** 判断是否会写入 vault 的工具（成功后应更新 marker） */
+const MEMORY_WRITE_TOOLS = new Set([
+  'remember', 'update_memory', 'set_memory_priority',
+  'archive_memory', 'delete_memory', 'memory_import', 'memory_setup',
+]);
+function isMemoryWriteTool(toolName: string): boolean {
+  return MEMORY_WRITE_TOOLS.has(toolName);
 }

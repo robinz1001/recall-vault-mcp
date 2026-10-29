@@ -1,112 +1,159 @@
 #!/usr/bin/env node
-// scripts/install-codebuddy.mjs — 一键安装 recall-vault 到 CodeBuddy
-// 运行: node scripts/install-codebuddy.mjs
+/**
+ * scripts/install-codebuddy.mjs — 一键安装 recall-vault 到 CodeBuddy
+ *
+ * 所有配置**用户级**（全局生效，所有项目自动继承）。
+ * Hook 脚本部署到 ~/.recall-vault/scripts/，配置里用绝对路径引用。
+ *
+ * 运行: node scripts/install-codebuddy.mjs
+ * 或:   node scripts/install-skills.mjs codebuddy  （等价）
+ */
 
-import { writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execSync } from 'node:child_process';
+import os from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, '..');
+const homedir = os.homedir();
 
-console.log('🔧 recall-vault CodeBuddy 安装程序\n');
+console.log('🔧 recall-vault → CodeBuddy 用户级全局安装\n');
 
-// Step 1: 确保 build 产物存在
-console.log('[1/4] 检查/编译 MCP server...');
-try {
-  execSync('npm run build', { cwd: root, stdio: 'inherit' });
-} catch (e) {
-  console.error('❌ npm run build 失败');
-  process.exit(1);
+// ── 路径常量 ──────────────────────────────────────────────────────────────
+
+const VAULT_ROOT = join(homedir, '.recall-vault');
+const HOOKS_TARGET = join(VAULT_ROOT, 'scripts');
+const HOOKS_SOURCE = join(root, 'scripts');
+const skillSource = join(root, 'skills', 'recall-vault', 'SKILL.md');
+
+function hookAbs(filename) {
+  return join(HOOKS_TARGET, filename).replace(/\\/g, '/');
 }
-console.log('✅ dist/index.js 就绪\n');
 
-// Step 2: 写入项目级 .mcp.json（CodeBuddy + Trae 通用）
-console.log('[2/4] 写入 .mcp.json（项目级 MCP 配置）...');
-const mcpConfig = {
-  mcpServers: {
-    'recall-vault': {
-      type: 'stdio',
-      command: 'node',
-      args: ['dist/index.js'],
-      cwd: '${workspaceFolder}',
-      env: {
-        COA_VAULT_PATH: '${workspaceFolder}',
-        COA_LOG_LEVEL: 'info',
-        START_MCP_TIMEOUT_MS: '30000',
-        RUN_MCP_TIMEOUT_MS: '60000',
-      },
+// ── 工具 ──────────────────────────────────────────────────────────────────
+
+function ensureDir(dir) {
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+}
+
+function readJson(filePath) {
+  if (!existsSync(filePath)) return null;
+  try { return JSON.parse(readFileSync(filePath, 'utf-8')); } catch { return null; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Step 1: 部署 hook 脚本
+// ═══════════════════════════════════════════════════════════════════════════
+
+console.log('[1/4] 部署 hook 脚本 → ' + HOOKS_TARGET);
+ensureDir(HOOKS_TARGET);
+for (const f of ['hook-session-start.mjs', 'hook-stop.mjs', 'hook-post-tool.mjs']) {
+  const src = join(HOOKS_SOURCE, f);
+  if (existsSync(src)) {
+    copyFileSync(src, join(HOOKS_TARGET, f));
+    console.log('  ✅ ' + f);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Step 2: Skill（用户级）
+// ═══════════════════════════════════════════════════════════════════════════
+
+console.log('\n[2/4] 复制 SKILL.md → ~/.codebuddy/skills/recall-vault/');
+const skillDest = join(homedir, '.codebuddy', 'skills', 'recall-vault', 'SKILL.md');
+ensureDir(dirname(skillDest));
+copyFileSync(skillSource, skillDest);
+console.log('  ✅ ' + skillDest);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Step 3: MCP 配置（用户级 ~/.codebuddy/.mcp.json）
+// ═══════════════════════════════════════════════════════════════════════════
+
+console.log('\n[3/4] 写入 ~/.codebuddy/.mcp.json（用户级 MCP 配置）...');
+
+const mcpFile = join(homedir, '.codebuddy', '.mcp.json');
+const existing = readJson(mcpFile) || { mcpServers: {} };
+const newServer = { command: 'npx', args: ['-y', 'recall-vault-mcp'] };
+
+existing.mcpServers = existing.mcpServers || {};
+existing.mcpServers['recall-vault'] = newServer;
+
+ensureDir(dirname(mcpFile));
+writeFileSync(mcpFile, JSON.stringify(existing, null, 2) + '\n', 'utf-8');
+console.log('  ✅ recall-vault → npx -y recall-vault-mcp');
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Step 4: Hooks 配置（用户级 ~/.codebuddy/settings.json）
+// ═══════════════════════════════════════════════════════════════════════════
+
+console.log('\n[4/4] 写入 ~/.codebuddy/settings.json（用户级 Hook 配置）...');
+
+const settingsFile = join(homedir, '.codebuddy', 'settings.json');
+let settings = readJson(settingsFile) || {};
+
+settings.hooks = {
+  ...(settings.hooks || {}),
+  SessionStart: [
+    {
+      hooks: [
+        {
+          type: 'command',
+          command: `node "${hookAbs('hook-session-start.mjs')}"`,
+          timeout: 30,
+        },
+      ],
     },
-  },
+  ],
+  Stop: [
+    {
+      loop_limit: 3,
+      hooks: [
+        {
+          type: 'command',
+          command: `node "${hookAbs('hook-stop.mjs')}"`,
+          timeout: 15,
+        },
+      ],
+    },
+  ],
+  PostToolUse: [
+    {
+      matcher: 'RunCommand|Bash|runCommand|run_command|ReadFile|FileRead|WriteFile|write_file|Write|Edit|EditFile|Glob|SearchGlob|Grep',
+      hooks: [
+        {
+          type: 'command',
+          command: `node "${hookAbs('hook-post-tool.mjs')}"`,
+          timeout: 15,
+        },
+      ],
+    },
+  ],
 };
 
-const mcpPath = join(root, '.mcp.json');
-writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2) + '\n', 'utf-8');
-console.log(`✅ 已写入 ${mcpPath}\n`);
+ensureDir(dirname(settingsFile));
+writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
+console.log('  ✅ SessionStart, Stop, PostToolUse hooks');
 
-// Step 3: 写入 .codebuddy/settings.json（Hook 配置）
-console.log('[3/4] 写入 .codebuddy/settings.json（Hook 配置）...');
-const codebuddyDir = join(root, '.codebuddy');
-if (!existsSync(codebuddyDir)) mkdirSync(codebuddyDir, { recursive: true });
+// ═══════════════════════════════════════════════════════════════════════════
+// 完成
+// ═══════════════════════════════════════════════════════════════════════════
 
-const settingsConfig = {
-  hooks: {
-    SessionStart: [
-      {
-        matcher: 'startup',
-        hooks: [
-          {
-            type: 'command',
-            command: 'node "$CODEBUDDY_PROJECT_DIR/scripts/hook-session-start.mjs"',
-            timeout: 30,
-          },
-        ],
-      },
-    ],
-    Stop: [
-      {
-        hooks: [
-          {
-            type: 'command',
-            command: 'node "$CODEBUDDY_PROJECT_DIR/scripts/hook-stop.mjs"',
-            timeout: 15,
-          },
-        ],
-      },
-    ],
-    PostToolUse: [
-      {
-        matcher: 'RunCommand|Bash',
-        hooks: [
-          {
-            type: 'command',
-            command: 'node "$CODEBUDDY_PROJECT_DIR/scripts/hook-post-tool.mjs"',
-            timeout: 15,
-          },
-        ],
-      },
-    ],
-  },
-};
+console.log(`
+✅ 安装完成！所有配置都是**用户级全局生效**。
 
-const settingsPath = join(codebuddyDir, 'settings.json');
-writeFileSync(settingsPath, JSON.stringify(settingsConfig, null, 2) + '\n', 'utf-8');
-console.log(`✅ 已写入 ${settingsPath}\n`);
+📂 部署的文件:
+   ${join(HOOKS_TARGET, 'hook-session-start.mjs')}
+   ${join(homedir, '.codebuddy', '.mcp.json')}
+   ${join(homedir, '.codebuddy', 'settings.json')}
+   ${skillDest}
 
-// Step 4: 总结
-console.log('[4/4] 安装完成 ✅\n');
-console.log('📂 生成的文件:');
-console.log(`   ${mcpPath}`);
-console.log(`   ${settingsPath}`);
-console.log(`   ${join(root, '.codebuddy/skills/recall-vault/SKILL.md')}`);
-console.log('');
-console.log('🚀 下一步:');
-console.log('   1. 在 CodeBuddy Settings → MCP 里启用 recall-vault');
-console.log('   2. 新建对话 → agent 应自动调 recall');
-console.log('   3. 如有问题，手动在 CodeBuddy 终端运行:');
-console.log('      export CODEBUDDY_PROJECT_DIR="$(pwd)"');
-console.log('      node scripts/hook-session-start.mjs');
-console.log('');
-console.log('💡 注意: Windows 上 CodeBuddy Hook 用 Git Bash 执行，');
-console.log('   请确保已安装 Git for Windows 并包含 bash.exe');
+💡 下一步:
+   1. 重启 CodeBuddy（或新开 session）
+   2. Settings → MCP → 确认 recall-vault 已启用
+   3. 新开对话 → agent 自动调 recall 取回 vault 记忆
+
+🔄 跨 IDE 接力:
+   vault 路径: ${VAULT_ROOT}
+   所有 IDE 共用这个 vault，CodeBuddy 存的记忆 Trae/Claude 都能读到
+`);

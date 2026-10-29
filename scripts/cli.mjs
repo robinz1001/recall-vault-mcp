@@ -24,7 +24,7 @@ function callMcp(method, params = {}, envOverrides = {}) {
   return new Promise((resolve, reject) => {
     const proc = spawn('node', [DIST_INDEX], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, COA_VAULT_PATH: PROJECT_ROOT, ...envOverrides },
+      env: { ...process.env, ...envOverrides },
       cwd: PROJECT_ROOT,
     });
 
@@ -146,15 +146,29 @@ async function cmdRemember(args) {
 
 async function cmdRecall(args) {
   const query = args._.slice(1).join(' ');
-  const params = { query, limit: 10, include_shared: true };
+  const params = { query, limit: args.limit ? parseInt(args.limit, 10) : 10, include_shared: args.include_shared !== 'false' };
+  // 自动推断 project_id（如果没显式指定）
+  params.project_id = args.project_id || path.basename(PROJECT_ROOT);
+  if (args.window) params.context_window_size = parseInt(args.window, 10);
+  if (args.memory_type) params.memory_type = args.memory_type;
+
   const result = await callMcp('tools/call', { name: 'recall', arguments: params });
   const info = JSON.parse(result.content[0].text);
   console.log(`🔎 搜索 "${query}" → 共 ${info.total} 条\n`);
   for (const r of info.results) {
     console.log(`  ${r.rank}. [${r.score.toFixed(2)}] ${r.title}`);
-    console.log(`     id=${r.memory_id}  priority=${r.priority}  ${r.memory_type}/${r.scope}`);
-    console.log(`     snippet: ${r.snippet?.slice(0, 80)}...`);
+    console.log(`     id=${r.memory_id}  priority=${r.priority}  ${r.memory_type}/${r.scope}  ~${r.est_tokens}tokens`);
+    if (r.staleness?.age_days !== undefined) {
+      const staleTag = r.staleness.stale ? ' ⚠️STALE' : '';
+      console.log(`     age=${r.staleness.age_days}d${staleTag}`);
+    }
+    console.log(`     snippet: ${r.snippet?.slice(0, 80)}${r.snippet?.length > 80 ? '...' : ''}`);
     console.log();
+  }
+  if (info.token_budget_hint) {
+    const h = info.token_budget_hint;
+    const adaptiveTag = h.limit_adaptive ? ' (自适应)' : '';
+    console.log(`💰 token_budget_hint: 结果 ~${h.results_est_tokens}tokens${h.window_size ? ` / ${h.window_size} window = ${h.window_usage_pct}%` : ''}${adaptiveTag}`);
   }
 }
 

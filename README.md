@@ -59,24 +59,33 @@ npx @smithery/cli install recall-vault-mcp --client codex --scope user
 npx @smithery/cli install recall-vault-mcp --client trae --scope user
 ```
 
-### 安装全局 Skill
+### 一键安装所有 IDE（推荐）
 
 ```bash
 npx recall-vault-mcp install-skills
 ```
 
-自动复制 SKILL.md 到 `~/.trae/skills/`、`~/.codebuddy/skills/`、`~/.claude/skills/` 等 7 个 IDE 全局目录。
+跑一次，自动写入**用户级全局配置**：MCP + Hooks + Skill 全装，永久生效，所有项目自动继承。
 
-## 支持的 IDE
+只装某个 IDE：
 
-| IDE | MCP 配置文件 | Hook 支持 |
-|-----|-------------|----------|
-| **Trae** | `.trae/mcp.json` | ✅ SessionStart / Stop / PostToolUse |
-| **CodeBuddy / WorkBuddy** | `.mcp.json` 或 `.codebuddy/mcp.json` | ✅ SessionStart / Stop / PostToolUse |
-| **Claude Code** | `~/.claude.json` | ❌ |
-| **Codex** | `~/.codex/mcp.json` | ❌ |
-| **Windsurf** | 全局 MCP 设置 | ❌ |
-| **Cursor** | `.cursor/mcp.json` | ❌ |
+```bash
+npx recall-vault-mcp install-skills codebuddy
+npx recall-vault-mcp install-skills trae-cn
+```
+
+## 支持的 IDE（全部用户级全局配置）
+
+| IDE | MCP 用户级路径 | Hooks | Skill |
+|-----|---------------|-------|-------|
+| **Trae CN** | `%APPDATA%\Trae CN\User\mcp.json` | ✅ SessionStart / Stop / PostToolUse | ✅ |
+| **Trae 国际版** | `%APPDATA%\Trae\User\mcp.json` | ✅ SessionStart / Stop / PostToolUse | ✅ |
+| **CodeBuddy / WorkBuddy** | `~/.codebuddy/.mcp.json` | ✅ SessionStart / Stop / PostToolUse | ✅ |
+| **Claude Code** | `~/.claude/settings.json` | ✅ SessionStart / Stop / PostToolUse | ✅ |
+| **Cursor** | `~/.cursor/mcp.json` | ✅ SessionStart / Stop / PostToolUse | ✅ |
+| **Codex** | `~/.codex/config.toml` | — | ✅ |
+| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` | ✅ pre_user_prompt（替代 SessionStart） | ✅ |
+| **OpenCode** | `~/.config/opencode/opencode.json` | —（AGENTS.md 规则注入） | ✅ |
 
 ## 核心功能
 
