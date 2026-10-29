@@ -1,0 +1,32 @@
+node_modules/
+dist/
+logs/
+.env
+.env.local
+*.log
+.DS_Store
+
+# Vault runtime data (用户本地记忆数据，不进 git)
+projects/
+shared/
+journal/
+${workspaceFolder}/
+VAULT.md
+
+# 临时调试文件
+*.txt
+direct-err*
+simple-out*
+spawn-test*
+test-output*
+.hook-fired*
+
+# 各 IDE 项目级配置（repo clone 后由用户自己配）
+# 注意：npm 包里的 skills/recall-vault/SKILL.md 是全局安装用的
+.trae/
+.codebuddy/
+.mcp.json
+
+# IDE cache
+.trae-cn/
+.codebuddy/

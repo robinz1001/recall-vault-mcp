@@ -1,0 +1,82 @@
+{
+  "name": "recall-vault-mcp",
+  "version": "0.2.0",
+  "description": "跨会话跨项目本地记忆 MCP server — flexsearch BM25 + TF-IDF 三路混合检索，双时钟事实管理，自动 Hook 链路。零 native 依赖，纯 Markdown vault。",
+  "type": "module",
+  "bin": {
+    "recall-vault-mcp": "bin/recall-vault-mcp.mjs"
+  },
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./config": "./dist/config.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/robinz1001/recall-vault-mcp.git"
+  },
+  "homepage": "https://github.com/robinz1001/recall-vault-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/robinz1001/recall-vault-mcp/issues"
+  },
+  "author": "robinz1001",
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "pack:dry": "npm pack --dry-run",
+    "publish:patch": "npm version patch && npm publish",
+    "publish:minor": "npm version minor && npm publish",
+    "install-codebuddy": "node scripts/install-codebuddy.mjs"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "memory",
+    "ai-agents",
+    "context-recall",
+    "local-first",
+    "flexsearch",
+    "bm25",
+    "rrf",
+    "staleness",
+    "claude-code",
+    "codex",
+    "codebuddy",
+    "trae",
+    "cursor",
+    "windsurf",
+    "obsidian",
+    "markdown"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "bin/",
+    "dist/",
+    "skills/",
+    "scripts/cli.mjs",
+    "scripts/install-skills.mjs",
+    "scripts/hook-session-start.mjs",
+    "scripts/hook-stop.mjs",
+    "scripts/hook-post-tool.mjs",
+    "INSTALL.md",
+    "README.md"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.4.0",
+    "flexsearch": "^0.8.212",
+    "gray-matter": "^4.0.3",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
