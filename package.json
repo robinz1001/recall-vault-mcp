@@ -1,6 +1,6 @@
 {
   "name": "recall-vault-mcp",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "跨会话跨项目本地记忆 MCP server — flexsearch BM25 + TF-IDF 三路混合检索，双时钟事实管理，自动 Hook 链路。零 native 依赖，纯 Markdown vault。",
   "type": "module",
   "bin": {
@@ -68,9 +68,7 @@
     "README.md",
     "server.json"
   ],
-  "mcpPackage": {
-    "repository": "github.com/robinz1001/recall-vault-mcp"
-  },
+  "mcpName": "io.github.robinz1001/recall-vault-mcp",
   "dependencies": {
     "@modelcontextprotocol/server": "^2.4.0",
     "flexsearch": "^0.8.212",

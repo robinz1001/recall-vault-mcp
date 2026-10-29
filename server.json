@@ -1,20 +1,20 @@
 {
-  "name": "io.github.robinz1001.recall-vault-mcp",
-  "version": "0.2.2",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.robinz1001/recall-vault-mcp",
   "description": "跨会话跨项目本地记忆 MCP server — flexsearch BM25 + TF-IDF 三路混合检索，双时钟事实管理，自动 Hook 链路。零 native 依赖，纯 Markdown vault。",
-  "author": {
-    "name": "robinz1001",
-    "email": "robin@rz-ai.work"
-  },
   "repository": {
-    "type": "git",
-    "url": "https://github.com/robinz1001/recall-vault-mcp"
+    "url": "https://github.com/robinz1001/recall-vault-mcp",
+    "source": "github"
   },
-  "npmPackage": "recall-vault-mcp",
-  "transport": "stdio",
-  "command": "npx",
-  "args": ["-y", "recall-vault-mcp"],
-  "keywords": ["mcp", "memory", "recall", "context", "flexsearch", "bm25", "rrf", "staleness", "local-first", "markdown"],
-  "homepage": "https://github.com/robinz1001/recall-vault-mcp",
-  "license": "MIT"
+  "version": "0.2.3",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "recall-vault-mcp",
+      "version": "0.2.3",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
 }
