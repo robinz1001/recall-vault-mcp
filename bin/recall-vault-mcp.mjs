@@ -21,7 +21,7 @@
 
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -97,7 +97,8 @@ if (sub === 'install-skills') {
 } else {
   // 默认：启动 MCP stdio server
   const indexPath = join(__dirname, '..', 'dist', 'index.js');
-  import(indexPath).catch((e) => {
+  // Windows: d:\... 绝对路径必须转 file:// URL 才能被 ESM import() 接受
+  import(pathToFileURL(indexPath).href).catch((e) => {
     console.error('Failed to start recall-vault-mcp:', e.message);
     console.error('Did you run `npm run build` first?');
     console.error('Or install globally: npm install -g recall-vault-mcp');
