@@ -259,6 +259,20 @@ export function createServer(): McpServer {
         // Phase 3: Eyes journal backlog
         journal_backlog: getJournalBacklog(),
         suggested_context,
+        // Phase 4: Debug — agent/project_id 推断问题诊断用
+        debug: {
+          cwd: process.cwd(),
+          inferred_project_id: vault.inferProjectId(),
+          ide_project_envs: {
+            TRAE_PROJECT_DIR: process.env.TRAE_PROJECT_DIR || null,
+            CODEBUDDY_PROJECT_DIR: process.env.CODEBUDDY_PROJECT_DIR || null,
+            CLAUDE_PROJECT_DIR: process.env.CLAUDE_PROJECT_DIR || null,
+            CODEX_PROJECT_DIR: process.env.CODEX_PROJECT_DIR || null,
+            WINDSURF_PROJECT_DIR: process.env.WINDSURF_PROJECT_DIR || null,
+            OPENCODE_PROJECT_DIR: process.env.OPENCODE_PROJECT_DIR || null,
+            COA_PROJECT_ID: process.env.COA_PROJECT_ID || null,
+          },
+        },
       };
 
       return { content: [{ type: 'text', text: JSON.stringify(info, null, 2) }] };

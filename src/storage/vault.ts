@@ -108,12 +108,26 @@ export class VaultManager {
 
   /**
    * 推断当前项目 ID。
-   * 优先级：COA_PROJECT_ID → cwd 的 basename。
+   * 优先级：COA_PROJECT_ID → IDE 注入的项目路径 env → cwd 的 basename。
    * 去掉非法字符（保留字母数字 _ -），确保作为目录名安全。
+   *
+   * 关键：不能只用 process.cwd() —— Trae/CodeBuddy 的 MCP 配置自动填 cwd，
+   * 不管打开哪个项目 cwd 都是一个固定路径。必须优先用 IDE 注入的 env 变量。
    */
   inferProjectId(): string {
     const envOverride = process.env.COA_PROJECT_ID;
-    const raw = envOverride ?? path.basename(process.cwd());
+    // IDE 注入的项目根目录（跨 IDE 兼容，和 hook 脚本同源）
+    const ideProjectDir =
+      process.env.TRAE_PROJECT_DIR ||
+      process.env.CODEBUDDY_PROJECT_DIR ||
+      process.env.CLAUDE_PROJECT_DIR ||
+      process.env.CODEX_PROJECT_DIR ||
+      process.env.WINDSURF_PROJECT_DIR ||
+      process.env.OPENCODE_PROJECT_DIR;
+    const raw =
+      envOverride ??
+      (ideProjectDir ? path.basename(ideProjectDir) : null) ??
+      path.basename(process.cwd());
     // 安全化：去掉非法目录名字符
     return raw.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || 'default';
   }
