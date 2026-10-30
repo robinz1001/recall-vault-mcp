@@ -125,17 +125,17 @@ function detectEvent(toolName, argsObj, responseStr) {
       };
     }
 
-    // git commit
+    // git commit — 默认 priority=1（不阻断 Stop Hook），只有配对了 test_pass/build_pass 才升级
     if (lower.includes('[main') || lower.includes('[master') || (lower.includes('committed') && lower.includes('hash')) || lower.includes('commit ')) {
       return {
         activity: {
           type: 'git_commit',
-          priority: 2,
+          priority: 1, // 单纯 commit 不值得阻断；有 test_pass/build_pass 配对时才会升级
           tags: ['commit'],
-          suggested_content: '代码已提交。',
+          suggested_content: null, // 没有具体决策内容，不给模板
           detail: truncated,
         },
-        hint: '📦 代码已提交！如需 remember 本次变更的核心决策：',
+        hint: null, // 单纯 commit 不推送 additionalContext（PostToolUse 不打扰）
       };
     }
 
@@ -244,6 +244,17 @@ process.stdin.on('end', () => {
     // 写 marker（只有产出事件才写，ReadFile/WriteFile/Edit 等不写）
     if (result.activity) {
       const marker = loadMarker();
+      // 升级 git_commit：如果已有 test_pass/build_pass 在 marker 里 → 说明是有意义的提交
+      if (result.activity.type === 'git_commit' && result.activity.priority <= 1) {
+        const hasValidation = marker.activities.some(
+          (a) => a.type === 'test_pass' || a.type === 'build_pass',
+        );
+        if (hasValidation) {
+          result.activity.priority = 3; // 有验证的提交 → 值得 remember
+          result.activity.suggested_content = '本次提交有测试/构建验证通过，包含实质性改动。';
+          result.hint = '📦 有验证的代码提交！请 remember 本次变更的核心决策：';
+        }
+      }
       marker.activities.push({
         ...result.activity,
         ts: new Date().toISOString(),
@@ -255,15 +266,19 @@ process.stdin.on('end', () => {
       saveMarker(marker);
     }
 
-    // 输出 additionalContext
-    process.stdout.write(
-      JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: 'PostToolUse',
-          additionalContext: `[RecallVault PostToolUse] ${result.hint}`,
-        },
-      }),
-    );
+    // 输出 additionalContext（hint=null 表示静默写 marker，不打扰 agent）
+    if (result.hint) {
+      process.stdout.write(
+        JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: 'PostToolUse',
+            additionalContext: `[RecallVault PostToolUse] ${result.hint}`,
+          },
+        }),
+      );
+    } else {
+      process.stdout.write(JSON.stringify({ continue: true }));
+    }
   } catch {
     process.stdout.write(JSON.stringify({ continue: true }));
   }
