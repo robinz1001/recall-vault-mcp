@@ -87,6 +87,27 @@ MCP server 是你的**存储层**，这个 skill 是你的**行为手册**。
 ## Part 2: 什么时候 remember？
 
 **黄金法则**：**值得在未来 3 个月内再用一次的东西**，就 remember。
+**执行原则**：**无感自动化** —— 在工作流中自然地调，不要等 Hook 打断你。
+
+### 🔔 自动判断 Checklist（每次完成一个任务后过一遍）
+
+不需要每次都逐条想，扫一眼这 4 个问题：
+
+```
+□ 我刚做了一个架构/技术选型决策？
+  → remember({ memory_type: 'semantic', priority: 2, scope: 'project' })
+
+□ 我刚踩了一个非显而易见的坑并修复了？
+  → remember({ memory_type: 'semantic', priority: 3, tags: ['踩坑','bug'] })
+
+□ 我刚和用户约定了某个需求/方案？
+  → remember({ memory_type: 'semantic', priority: 2, scope: 'project' })
+
+□ 这次 debug/修复花了 10 分钟以上才定位？
+  → remember({ memory_type: 'semantic', priority: 3, tags: ['debug'] })
+```
+
+**判断完如果 4 个都是 NO** → 跳过，不用 remember。
 
 ### ✅ 一定要 remember 的
 
@@ -105,6 +126,7 @@ MCP server 是你的**存储层**，这个 skill 是你的**行为手册**。
 | 一次性的命令（比如 `ls -la`） | 没长期价值 |
 | 临时文件路径 | 机器相关，换环境就失效 |
 | AI 建议但没被采纳的方案 | 未来会混淆 |
+| 单纯的代码提交（没有决策/踩坑） | commit message 就是了 |
 | 短会话里的碎碎念 | vault 会被垃圾淹没 |
 
 ### remember 的 content 写法

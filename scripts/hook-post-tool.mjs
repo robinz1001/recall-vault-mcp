@@ -103,7 +103,7 @@ function detectEvent(toolName, argsObj, responseStr) {
       };
     }
 
-    // build pass
+    // build pass — priority=2，静默写 marker 不打扰（agent 自己判断要不要 remember）
     const buildPass = (
       lower.includes('compiled successfully') ||
       lower.includes('build succeeded') ||
@@ -118,52 +118,52 @@ function detectEvent(toolName, argsObj, responseStr) {
           type: 'build_pass',
           priority: 2,
           tags: ['build'],
-          suggested_content: '构建/编译成功。',
+          suggested_content: null,
           detail: truncated,
         },
-        hint: '🏗️ 构建成功！请 remember 这次构建涉及的技术决策：',
+        hint: null, // 静默
       };
     }
 
-    // git commit — 默认 priority=1（不阻断 Stop Hook），只有配对了 test_pass/build_pass 才升级
+    // git commit — 默认 priority=1，配对 test_pass/build_pass 时升级到 3 并推 hint
     if (lower.includes('[main') || lower.includes('[master') || (lower.includes('committed') && lower.includes('hash')) || lower.includes('commit ')) {
       return {
         activity: {
           type: 'git_commit',
-          priority: 1, // 单纯 commit 不值得阻断；有 test_pass/build_pass 配对时才会升级
+          priority: 1,
           tags: ['commit'],
-          suggested_content: null, // 没有具体决策内容，不给模板
+          suggested_content: null,
           detail: truncated,
         },
-        hint: null, // 单纯 commit 不推送 additionalContext（PostToolUse 不打扰）
+        hint: null,
       };
     }
 
-    // 依赖安装
+    // 依赖安装 — priority=2，静默
     if ((lower.includes('added') || lower.includes('installed')) && lower.includes('package')) {
       return {
         activity: {
           type: 'install',
           priority: 2,
           tags: ['dependency'],
-          suggested_content: '新增/更新了依赖。',
+          suggested_content: null,
           detail: truncated,
         },
-        hint: '📥 新增依赖！请判断是否值得 remember：',
+        hint: null,
       };
     }
 
-    // deploy/publish
+    // deploy/publish — priority=2，静默
     if (lower.includes('deployed') || lower.includes('published') || lower.includes('deploy success') || lower.includes('deployed to')) {
       return {
         activity: {
           type: 'deploy',
           priority: 2,
           tags: ['deploy'],
-          suggested_content: '已部署/发布。',
+          suggested_content: null,
           detail: truncated,
         },
-        hint: '🚀 已部署！请 remember 部署配置和注意事项：',
+        hint: null,
       };
     }
 

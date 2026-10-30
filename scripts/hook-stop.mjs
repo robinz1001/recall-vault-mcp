@@ -14,7 +14,10 @@ import path from 'node:path';
 
 const cwd = process.env.TRAE_PROJECT_DIR || process.env.CODEBUDDY_PROJECT_DIR || process.env.CLAUDE_PROJECT_DIR || process.env.CODEX_PROJECT_DIR || process.env.WINDSURF_PROJECT_DIR || process.env.OPENCODE_PROJECT_DIR || process.cwd();
 const markerFile = path.join(cwd, 'agent-state', 'activity.json');
-const REMEMBER_WINDOW_MS = 10 * 60 * 1000; // 10 分钟内有 remember 就算
+/** remember 冷却期：一次 remember 后 30 分钟内不再阻断（避免频繁打扰） */
+const REMEMBER_COOLDOWN_MS = 30 * 60 * 1000;
+/** activity 过期时间：超过 2 小时的不再阻断 */
+const ACTIVITY_TTL_MS = 2 * 60 * 60 * 1000;
 
 function loadMarker() {
   try {
@@ -23,19 +26,29 @@ function loadMarker() {
   } catch { return { activities: [], last_remember_ts: null }; }
 }
 
-/** 过滤出"值得阻断"的 activity：高价值 + 最近 + 没被 remember 过 */
+/**
+ * 过滤出"值得阻断"的 activity
+ * 规则（严格收敛，Stop Hook 是最后防线，不是日常提醒）：
+ *   1. priority >= 3（只有 test_pass 和有验证的 commit 才会到 3）
+ *   2. 在冷却期外（最近 30 分钟内没 remember 过）
+ *   3. activity 没过期（2 小时内）
+ *   4. 没被 remember 过（remember 比 activity 新的不算）
+ */
 function filterWorthy(activities, lastRememberTs) {
   if (!activities || activities.length === 0) return [];
   const now = Date.now();
   const lastRememberMs = lastRememberTs ? new Date(lastRememberTs).getTime() : 0;
 
+  // 冷却期内 → 整体放弃阻断
+  if (now - lastRememberMs < REMEMBER_COOLDOWN_MS) return [];
+
   return activities.filter((a) => {
     const ageMs = now - new Date(a.ts).getTime();
-    // 超过 2 小时的 activity 不再阻断（太久了）
-    if (ageMs > 2 * 60 * 60 * 1000) return false;
-    // priority=1 的（command_success）不阻断
-    if (a.priority <= 1) return false;
-    // 如果 remember 比 activity 新 → 这条已经被记住了
+    // 过期
+    if (ageMs > ACTIVITY_TTL_MS) return false;
+    // 只有 priority >= 3 才阻断（priority 1=commit 静默过，2=build/install/deploy 静默过）
+    if (a.priority < 3) return false;
+    // 已被 remember 过
     if (lastRememberMs > new Date(a.ts).getTime()) return false;
     return true;
   });
@@ -102,9 +115,8 @@ if (worthy.length > 0) {
     ...marker,
     last_remember_ts: new Date().toISOString(),
     activities: marker.activities.filter((a) => {
-      // 清理掉超过 2 小时的 activity
       const ageMs = Date.now() - new Date(a.ts).getTime();
-      return ageMs < 2 * 60 * 60 * 1000;
+      return ageMs < ACTIVITY_TTL_MS;
     }),
   };
   try {
