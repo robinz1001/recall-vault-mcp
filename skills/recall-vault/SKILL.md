@@ -11,18 +11,18 @@ hooks:
     - matcher: "startup"
       hooks:
         - type: command
-          command: 'node "$CODEBUDDY_PROJECT_DIR/scripts/hook-session-start.mjs"'
+          command: 'node ~/.recall-vault/scripts/hook-session-start.mjs'
           timeout: 30
   Stop:
     - hooks:
         - type: command
-          command: 'node "$CODEBUDDY_PROJECT_DIR/scripts/hook-stop.mjs"'
+          command: 'node ~/.recall-vault/scripts/hook-stop.mjs'
           timeout: 15
   PostToolUse:
-    - matcher: "RunCommand|Bash"
+    - matcher: "RunCommand|Bash|WriteFile|Write|Edit|Glob|Grep|ReadFile|Read"
       hooks:
         - type: command
-          command: 'node "$CODEBUDDY_PROJECT_DIR/scripts/hook-post-tool.mjs"'
+          command: 'node ~/.recall-vault/scripts/hook-post-tool.mjs'
           timeout: 15
 ---
 
