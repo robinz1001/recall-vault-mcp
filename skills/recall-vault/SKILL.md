@@ -1,7 +1,7 @@
 ---
 name: recall-vault
 description: |
-  跨会话、跨项目本地记忆管理系统。session_start 主动载入上下文，session_end 自动保存。
+  跨会话、跨项目本地记忆管理系统。session_start 强制前置载入上下文，remember 自动推断，recall 优先于 grep。
   当你需要记住技术决策、搜索历史记忆、或在新 session 里恢复项目上下文时使用。
   触发词：remember、recall、记忆、回忆、vault、/recall-vault。
 scope: global
@@ -26,168 +26,141 @@ hooks:
           timeout: 15
 ---
 
-# RecallVault — 流程剧本
+# RecallVault — Agent 行为剧本
 
-你是 recall-vault 的运行时代理。MCP server 是你的存储层，这个 skill 是你的行为剧本。
+你是 recall-vault 的运行时代理。**你是主角，MCP 是存储层，Hook 是安全员（不抢戏）。**
 
 ---
 
-## ⭐ 核心流程（每次 session 必走）
+## Step 1: session 开始 → 立即调 `session_start`（硬性前置）
 
-### Step 1: session 开始 → 调 `session_start`
-
-**第一件事，任何其他 tool call 之前。**
+**不调这个，后面的都别做。** 如果你在 session 中还没调过它，**现在就调**。
 
 ```
 session_start()
 ```
 
-返回结构（直接用，不要自己拼装）：
+拿到返回值后：
+- **记下来 `session_id`** — 后续所有 remember() 复用
+- 扫一眼 `compacted_summary`（约 200 token，省一次 recall）
+- 如果 `recent_high_value` 或 `previous_session` 和当前任务相关 → 继续用 recall 深挖
+- 照做 `suggested_actions`
 
-| 字段 | 怎么用 |
-|---|---|
-| `session_id` | **记下来**，后续所有 remember() 复用这个值 |
-| `project_status` | 快速扫一眼有多少 semantic/episodic、多少 priority=3 |
-| `recent_high_value` | Top 3 priority=3 的记忆 — 如果当前任务相关，用 recall 深挖 |
-| `previous_session` | 上一个 session 的 episodic — 判断和当前任务是否相关 |
-| `cross_project_hints` | 提醒你 shared 层有什么通用经验 |
-| `suggested_actions` | 照做就行（已经帮你想好了） |
-| `compacted_summary` | 直接读这个，约 200-300 token，省一次 recall |
+---
 
-### Step 2: 工作中 → 主动 remember + recall
+## Step 2: 工作中 → 主动 recall + remember
 
-**不需要 Hook 提醒，自己判断。**
+### 🔴 Recall BEFORE remember（强制）
 
-**什么时候 recall：**
-- 开始一个新子任务前 → `recall({ query: "<子任务关键词>", compact: true })`
-- 用户说"之前"、"上次"、"我们讨论过" → `recall({ query: "<话题>", include_shared: true, compact: true })`
-- debug 卡壳 → `recall({ query: "error + 关键报错", compact: true })`
-
-**什么时候 remember（4 个 checklist，任一 YES 就存）：**
-
-```
-□ 刚做了一个架构/技术选型决策？
-  → remember({ content: "决策是什么 → 为什么 → 替代方案 → 影响", priority: 2 })
-
-□ 刚踩了一个非显而易见的坑并修复了？
-  → remember({ content: "现象 → 根因 → 修复", priority: 3, tags: ["踩坑","bug"] })
-
-□ 刚和用户约定了某个需求/方案？
-  → remember({ content: "约定原话 + 是谁说的", priority: 2 })
-
-□ 这次 debug/修复花了 10 分钟以上才定位？
-  → remember({ content: "问题 → 定位过程 → 修复点 → 为什么之前没发现", priority: 3 })
-```
-
-**参数简化**：只传 content 就行。MCP 会自动推断 memory_type、scope、priority、tags。需要覆盖时手动指定：
+**任何 remember 之前，先 recall 看看有没有近似的。** 避免存重复记忆。
 
 ```typescript
-// 最简（推荐）
-remember({ content: "决策正文" })
+// 1. 先搜
+const prev = recall({ query: "<你要存的内容关键词>", compact: true });
 
-// 需要跨项目复用时
-remember({ content: "决策正文", scope: "shared" })
-
-// session_id 复用 session_start 返回的值
-remember({ content: "正文", session_id: "sess_20261030" })
+// 2. 有近似的 → 用 replaces 取代旧的
+if (prev.results.length > 0 && prev.results[0].score > 0.5) {
+  remember({ content: "...", replaces: prev.results[0].memory_id });
+} else {
+  // 3. 没有 → 新建
+  remember({ content: "..." });
+}
 ```
 
-**不要 remember 的：**
-- 单纯的代码提交（没有决策/踩坑）
-- 一次性命令、临时路径、碎碎念
-- AI 建议但没被采纳的方案
+### 什么时候 recall（3 种场景）
 
-### Step 3: session 结束 → 调 `session_end`
+| 场景 | 查询方式 |
+|---|---|
+| 开始新子任务 | `recall({ query: "<子任务关键词>", compact: true })` |
+| 用户说"之前/上次/我们讨论过" | `recall({ query: "<话题>", include_shared: true, compact: true })` |
+| debug 卡壳 | `recall({ query: "<关键报错> + bug", compact: true })` |
 
-**结束前，最后一件事。**
+### 🔴 recall 空结果行为（强制）
+
+`recall({ results: [] })` → **明确说** "我没有相关历史记忆"，**绝对不能** 把空结果当答案瞎编。
+
+### 什么时候 remember（简化规则）
+
+**花了 >1 分钟才搞定** 的决策/修复/发现 → 存。10 秒搞定的 → 跳过。
+
+```typescript
+// 最简 — 只传 content，MCP 自动推断 memory_type/scope/priority/tags
+remember({ content: "..." })
+
+// 手动覆盖（需要跨项目复用时）
+remember({ content: "...", scope: "shared" })
+```
+
+**不要存：** 单纯的代码提交、一次性命令、临时路径、没被采纳的方案。
+
+### token 预算决策
+
+- 默认 **compact: true**（省 ~80% token）→ 只有 id/score/wikilink
+- 需要读完整内容 → **不要** 用 recall 的完整模式，而是 `ReadFile(wikilink 指向的文件路径)`
+- **不确定就 compact:true**
+
+### 什么时候调 organize_memories
+
+当你觉得 vault 开始乱了：重复记忆多、tags 空、priority=3 长期没更新。
+
+```typescript
+organize_memories({ mode: "deep" })  // 执行 dedup + promote + tags 补齐
+// 或先 dry-run
+organize_memories({ mode: "light" })  // 只看建议，不动数据
+```
+
+---
+
+## Step 3: session 结束 → 调 `session_end`
+
+**结束前，最后一件事。** 不调也不会丢数据（文件已落盘），但调了能给下次 session 留个"上一次做了啥"的入口。
 
 ```typescript
 session_end({
   summary: "本次 session 做了什么",
-  highlights: [
-    "完成了 X 功能",
-    "修复了 Y bug（根因是 Z）",
-    "决定了用 A 方案而非 B",
-  ],
+  highlights: ["完成了 X", "修复了 Y", "决定了 Z"],
 })
 ```
 
-不传 summary 就只记录最小元数据（但建议传）。
+---
+
+## 13 个 MCP 工具速查
+
+| 工具 | 什么时候用 |
+|---|---|
+| **session_start** | ⭐ **每次 session 第一件事（硬性前置）** |
+| **session_end** | ⭐ **每次 session 结束前** |
+| remember | recall before remember → 有近似就 replaces，没有就新建 |
+| recall | 新任务前、用户提"之前"、debug 卡壳。默认 compact:true |
+| organize_memories | vault 开始乱了。light=dry-run，deep=执行 |
+| list_memories | 盘点 vault（少用） |
+| update_memory | 更新已有记忆（少用，优先 remember + replaces） |
+| archive_memory | 软删除（不物理删） |
+| delete_memory | ⚠️ 永久删除（慎重） |
+| set_memory_priority | 快速调优先级（少用） |
+| health_check | 诊断 vault 状态 |
+| memory_setup | 初始化 vault（首次） |
+| memory_import | 从 docs/ 导入文档 |
 
 ---
 
-## 12 个 MCP 工具速查
+## Hook 兜底（安全员，不抢戏）
 
-| 工具 | 什么时候用 | 常用参数 |
+Hook 是最后防线。如果你（agent）主动 remember/recall 了，hook 不会打扰你。
+
+| Hook | 打扰级别 | 说明 |
 |---|---|---|
-| **session_start** | ⭐ **session 开始第一件事** | （无，或 project_id） |
-| **session_end** | ⭐ **session 结束前** | summary, highlights |
-| remember | 有决策/踩坑/约定要存 | content, session_id, priority? |
-| recall | 搜历史记忆 | query, compact: true, include_shared? |
-| list_memories | 盘点 vault | project_id, compact: true |
-| archive_memory | 软删除（不物理删） | memory_id |
-| update_memory | 更新已有记忆 | memory_id, content? |
-| delete_memory | **永久删除**（慎重） | memory_id |
-| set_memory_priority | 快速调优先级 | memory_id, priority |
-| health_check | 诊断 vault 状态 | （无） |
-| memory_setup | 初始化 vault（首次） | generate_starters? |
-| memory_import | 从 docs/ 导入文档 | from_docs: true |
+| SessionStart | 轻 | 自动注入 vault 摘要（给你上下文，不是阻断） |
+| PostToolUse | 极轻 | 只有 test_pass 才推 hint，其他静默写 marker |
+| Stop | 极少 | 只拦 priority≥3 + 冷却期外 |
 
 ---
 
-## Hook 兜底（Layer 2）
-
-Hook 是最后防线——如果 Layer 1（你主动 remember）搞定了，hook 不会打扰你。
-
-| Hook | 触发条件 | 打扰级别 |
-|---|---|---|
-| SessionStart | IDE 自动注入 vault 摘要 | 轻（给你上下文，不是阻断） |
-| PostToolUse | 只有 test_pass 才推 hint | 极轻 |
-| Stop | **只拦 priority≥3 + 冷却期外** | 极少触发 |
-
----
-
-## 存储结构
+## 决策优先级
 
 ```
-~/.recall-vault/                      ← vault 根（全局唯一）
-├── projects/
-│   ├── <project-id>/
-│   │   ├── semantic/*.md           ← 项目长期知识（决策、架构、踩坑）
-│   │   └── episodic/*.md           ← 会话摘要（session_end 写入）
-└── shared/
-    └── semantic/*.md               ← 跨项目通用知识
-```
-
-记忆文件 frontmatter：
-
-```yaml
----
-memory_id: mem_20261030_001
-memory_type: semantic               # semantic | episodic
-priority: 3                         # 1=low 2=normal 3=high
-tags: [决策, MCP]
-agent: trae
-session_id: sess_20261030
-valid_from: 2026-10-30T10:00:00Z
-valid_to: null                      # 被 supersedes 时设
-supersedes: null
-superseded_by: null
-reviewed: false
----
-```
-
----
-
-## 跨 IDE 路径映射
-
-| IDE | Skill | MCP | Hooks |
-|---|---|---|---|
-| Trae CN | `~/.trae-cn/skills/recall-vault/` | `%APPDATA%\Trae CN\User\mcp.json` | `~/.trae-cn/hooks.json` |
-| CodeBuddy | `~/.codebuddy/skills/recall-vault/` | `~/.codebuddy/.mcp.json` | `~/.codebuddy/settings.json` |
-| Claude Code | `~/.claude/skills/recall-vault/` | `~/.claude/settings.json` | 同上 |
-
-**一键安装**（所有 IDE）：
-```bash
-npx -y recall-vault-mcp install-skills
+1. session_start 强制前置 → 跳过 = 你没按剧本走
+2. Recall before remember → 避免重复
+3. recall 空结果 → 明确说没有，别瞎编
+4. 不确定该不该 remember？→ 花 >1min 才搞定的 → 存
 ```
