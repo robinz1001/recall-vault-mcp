@@ -21,58 +21,58 @@ import { setPriority } from './tools/set_memory_priority.js';
 import { wrapHandler, getJournalBacklog } from './tools/_wrap.js';
 import { memorySetup } from './tools/memory_setup.js';
 import { memoryImport } from './tools/memory_import.js';
+import { sessionStart } from './tools/session_start.js';
+import { sessionEnd } from './tools/session_end.js';
 
-const TOTAL_TOOLS = 10;
+const TOTAL_TOOLS = 12;
 
 const SERVER_INSTRUCTIONS = `# RecallVault — Memory Usage Guide
 
-You are connected to RecallVault, a local-first memory layer for this project. All memories are Markdown files in the vault root.
+## ⭐ SESSION START/END (MUST USE THESE)
 
-## When to SAVE (call remember) — proactive, do not wait for the user to ask
+These are your PRIMARY entry points. Every session:
+
+1. **Call \`session_start\` FIRST** — before any other tool call. It returns:
+   - project_status: vault stats
+   - recent_high_value: priority=3 top memories (compact)
+   - previous_session: last episodic summary
+   - suggested_actions: what to do next
+   - session_id: reuse this for all remember() calls this session
+
+2. **Call \`session_end\` LAST** — before ending the conversation. It saves:
+   - A summary of what happened (episodic memory)
+   - Your highlights (decisions, fixes, discoveries)
+   - Auto-generated session_id
+
+## When to SAVE (call remember) — proactive
 
 After any of these, call remember immediately:
 - **Architecture decisions** — what you chose and why (memory_type: semantic, scope: project or shared)
 - **Bugs you fixed** — what caused it, how you solved it (memory_type: semantic, scope: project, priority: 3)
 - **Project conventions** — naming, file layout, API style (memory_type: semantic, scope: project)
 - **Cross-project knowledge** — patterns reusable elsewhere (memory_type: semantic, scope: shared)
-- **Session summary** — at the end of a task or when the conversation is ending (memory_type: episodic, scope: project)
 
-## When to RECALL (call recall) — proactive, do not wait for the user to ask
+## When to RECALL (call recall) — proactive
 
 Call recall with include_shared=true:
-- **At the start of a new session** — refresh your context
-- **Before starting a related task** — "have we done something like this before?"
-- **When debugging** — "what caused similar issues last time?"
-- **When the user says "before" or "previously"** — they expect context continuity
+- Before starting a related task — "have we done something like this before?"
+- When debugging — "what caused similar issues last time?"
+- When the user says "before" or "previously" — they expect context continuity
 
-## ⚡ TOKEN-SAVING PATTERN (critical for large vaults)
+## ⚡ TOKEN-SAVING PATTERN
 
-recall() has a compact mode that saves ~80% tokens. Use it as default:
-  recall({ query: "bug fix", compact: true })  ← 极简：只有 id/score/wikilink
-  recall({ query: "bug fix" })                  ← 默认：带 snippet + 完整元数据
+recall() has compact mode that saves ~80% tokens. Use it as default:
+  recall({ query: "bug fix", compact: true })
 
-agent 拿到 compact results 后，用 wikilink [[projects/.../memory_id]] 直接打开 Markdown 文件看完整内容。
-IDE 原生支持点击 Markdown 链接。
+## Tool inventory (12 tools)
 
-When your context_window_size is small (≤32K), ALWAYS use compact mode.
-
-## Output rules
-
-- recall results: cite the source path on every fact. Show score + snippet so the user can verify.
-- Every returned path is absolute and clickable in the vault.
-- Markdown files are the single source of truth — do not delete, only archive.
-
-## Tool inventory
-
-health_check | remember | recall | list_memories | archive_memory | update_memory | delete_memory | set_memory_priority
+session_start | session_end | health_check | remember | recall | list_memories | archive_memory | update_memory | delete_memory | set_memory_priority | memory_setup | memory_import
 
 ## Quick params
 
-- default project_id: use the workspace folder basename
-- default agent: trae (or claude-code / codex as appropriate)
-- default scope: project for episodic, project or shared for semantic
+- default project_id: workspace folder basename
+- default session_id: from session_start (reuse it!)
 - priority 1=low 2=normal 3=high — use 3 for critical decisions and hard-won fixes
-- session_id: use sess_YYYYMMDD format, shared across one conversation
 `;
 
 export function createServer(): McpServer {
@@ -205,6 +205,7 @@ export function createServer(): McpServer {
         dirs_ok: dirsOk,
         tools_registered: TOTAL_TOOLS,
         tools: [
+          'session_start', 'session_end',
           'health_check', 'remember', 'recall', 'list_memories', 'archive_memory',
           'update_memory', 'delete_memory', 'set_memory_priority', 'memory_setup', 'memory_import',
         ],
@@ -468,6 +469,49 @@ export function createServer(): McpServer {
         };
       } catch (err: any) {
         return { isError: true, content: [{ type: 'text', text: `memory_import failed: ${err.message}` }] };
+      }
+    }),
+  );
+
+  // === session_start ===
+  server.registerTool(
+    'session_start',
+    {
+      description:
+        'Session 启动入口（inhale）—— 新 session 的**第一件事**就调这个。一次返回 vault 状态、高价值记忆 Top 3、上一个 session 摘要、suggested_actions。返回的 session_id 后续 remember 复用。',
+      inputSchema: z.object({
+        project_id: z.string().optional().describe('不传则自动从 cwd 推断'),
+      }),
+    },
+    wrapHandler('session_start', async (args) => {
+      try {
+        const result = await sessionStart(args);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      } catch (err: any) {
+        return { isError: true, content: [{ type: 'text', text: `session_start failed: ${err.message}` }] };
+      }
+    }),
+  );
+
+  // === session_end ===
+  server.registerTool(
+    'session_end',
+    {
+      description:
+        'Session 结束入口（exhale）—— 结束前调这个。自动生成 episodic 记忆，保存会话摘要和 highlights。',
+      inputSchema: z.object({
+        summary: z.string().optional().describe('本次 session 的总结：做了什么、有什么产出'),
+        highlights: z.array(z.string()).optional().describe('重要产出：决策、修复、新发现等'),
+        session_id: z.string().optional().describe('覆盖 session_id（默认自动生成）'),
+        project_id: z.string().optional().describe('覆盖 project_id（默认自动推断）'),
+      }),
+    },
+    wrapHandler('session_end', async (args) => {
+      try {
+        const result = await sessionEnd(args);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      } catch (err: any) {
+        return { isError: true, content: [{ type: 'text', text: `session_end failed: ${err.message}` }] };
       }
     }),
   );

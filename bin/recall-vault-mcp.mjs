@@ -70,7 +70,7 @@ function printHelp() {
 }
 
 // 子命令模式（非 MCP server 模式）
-const mcpCliSubcommands = ['doctor', 'list', 'recall', 'remember', 'archive'];
+const mcpCliSubcommands = ['doctor', 'list', 'recall', 'remember', 'archive', 'session-start', 'session-end'];
 const specialSubcommands = ['install-skills'];
 const sub = args[0];
 

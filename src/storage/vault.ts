@@ -105,4 +105,26 @@ export class VaultManager {
   getSharedSemanticDir(): string {
     return this.sharedSemanticDir;
   }
+
+  /**
+   * 推断当前项目 ID。
+   * 优先级：COA_PROJECT_ID → cwd 的 basename。
+   * 去掉非法字符（保留字母数字 _ -），确保作为目录名安全。
+   */
+  inferProjectId(): string {
+    const envOverride = process.env.COA_PROJECT_ID;
+    const raw = envOverride ?? path.basename(process.cwd());
+    // 安全化：去掉非法目录名字符
+    return raw.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || 'default';
+  }
+
+  /** 返回项目 episodic 目录路径（不自动创建） */
+  getEpisodicDir(projectId: string): string {
+    return path.join(this.projectsDir, path.basename(projectId), 'episodic');
+  }
+
+  /** 返回项目 semantic 目录路径（不自动创建） */
+  getSemanticDir(projectId: string): string {
+    return path.join(this.projectsDir, path.basename(projectId), 'semantic');
+  }
 }
