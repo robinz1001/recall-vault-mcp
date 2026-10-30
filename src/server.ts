@@ -23,8 +23,9 @@ import { memorySetup } from './tools/memory_setup.js';
 import { memoryImport } from './tools/memory_import.js';
 import { sessionStart } from './tools/session_start.js';
 import { sessionEnd } from './tools/session_end.js';
+import { organizeMemories } from './tools/organize_memories.js';
 
-const TOTAL_TOOLS = 12;
+const TOTAL_TOOLS = 13;
 
 const SERVER_INSTRUCTIONS = `# RecallVault — Memory Usage Guide
 
@@ -64,9 +65,9 @@ Call recall with include_shared=true:
 recall() has compact mode that saves ~80% tokens. Use it as default:
   recall({ query: "bug fix", compact: true })
 
-## Tool inventory (12 tools)
+## Tool inventory (13 tools)
 
-session_start | session_end | health_check | remember | recall | list_memories | archive_memory | update_memory | delete_memory | set_memory_priority | memory_setup | memory_import
+session_start | session_end | health_check | remember | recall | list_memories | archive_memory | update_memory | delete_memory | set_memory_priority | memory_setup | memory_import | organize_memories
 
 ## Quick params
 
@@ -205,7 +206,7 @@ export function createServer(): McpServer {
         dirs_ok: dirsOk,
         tools_registered: TOTAL_TOOLS,
         tools: [
-          'session_start', 'session_end',
+          'session_start', 'session_end', 'organize_memories',
           'health_check', 'remember', 'recall', 'list_memories', 'archive_memory',
           'update_memory', 'delete_memory', 'set_memory_priority', 'memory_setup', 'memory_import',
         ],
@@ -512,6 +513,27 @@ export function createServer(): McpServer {
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (err: any) {
         return { isError: true, content: [{ type: 'text', text: `session_end failed: ${err.message}` }] };
+      }
+    }),
+  );
+
+  // === organize_memories ===
+  server.registerTool(
+    'organize_memories',
+    {
+      description:
+        '自动整理 vault：补 tags、promote stale priority=3 记忆、去重（同 project + 同 type + 内容高度相似）。mode=light 只做建议不动数据（默认），mode=deep 会设 valid_to 关闭旧记忆。',
+      inputSchema: z.object({
+        mode: z.enum(['light', 'deep']).optional().describe('light=只建议不改数据（默认），deep=执行 dedup/promote/tags 补齐'),
+        project_id: z.string().optional().describe('限定某个项目，不传则全局'),
+      }),
+    },
+    wrapHandler('organize_memories', async (args) => {
+      try {
+        const result = await organizeMemories(args);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      } catch (err: any) {
+        return { isError: true, content: [{ type: 'text', text: `organize_memories failed: ${err.message}` }] };
       }
     }),
   );
