@@ -21,25 +21,95 @@ import type {
 
 export interface RememberArgs {
   content: string;
-  memory_type: MemoryType;
+  /** v0.4.0: 可选。不传则自动推断（默认 semantic） */
+  memory_type?: MemoryType;
+  /** v0.4.0: 可选。不传则自动推断（默认 project） */
   scope?: MemoryScope;
+  /** v0.4.0: 可选。不传则从 cwd 自动推断 */
   project_id?: string;
   session_id?: string;
   agent?: MemoryAgent;
+  /** v0.4.0: 可选。不传则从 content 自动提取 */
   tags?: string[];
   related_files?: string[];
+  /** v0.4.0: 可选。不传则自动推断（默认 2） */
   priority?: MemoryPriority;
   append_to?: string;
-  /** Phase 2: 取代旧记忆（事实变更场景）。旧记忆 valid_to 自动设为 now + superseded_by=<新id> */
   replaces?: string;
+}
+
+/**
+ * 自动推断记忆元数据
+ *
+ * 规则（保守优先，错了 agent 可以手动覆盖）：
+ * - memory_type: 含"session/会话/本次" → episodic；默认 semantic
+ * - scope: 含"通用/可复用/任何项目/跨项目" → shared；默认 project
+ * - priority: 含"坑/错误/修复/踩坑/崩溃/bug/debug/非显而易见" → 3；默认 2
+ * - tags: 从关键词表提取（命中则加）
+ */
+export function inferMemoryMeta(content: string): Partial<{
+  memory_type: MemoryType;
+  scope: MemoryScope;
+  priority: MemoryPriority;
+  tags: string[];
+}> {
+  const c = content.toLowerCase();
+
+  // memory_type
+  let memoryType: MemoryType | undefined;
+  if (/session|会话|本次|今天/.test(content)) memoryType = 'episodic';
+
+  // scope
+  let scope: MemoryScope | undefined;
+  if (/(通用|可复用|任何项目|跨项目|所有项目|shared|cross.project|reusable)/i.test(content)) {
+    scope = 'shared';
+  }
+
+  // priority
+  let priority: MemoryPriority | undefined;
+  if (/(坑|错误|修复|踩坑|崩溃|bug|debug|非显而易见|access violation|crash|workaround|hack|tricky|gotcha|pitfall|non-obvious)/i.test(content)) {
+    priority = 3;
+  }
+
+  // tags — 关键词映射（保守，命中才加）
+  const tagMap: Record<string, string> = {
+    决策: '决策', decision: '决策',
+    架构: '架构', architecture: '架构',
+    选型: '选型', choice: '选型',
+    坑: '踩坑', 踩坑: '踩坑', bug: 'bug', 错误: 'bug', 修复: 'bug',
+    debug: 'debug', 定位: 'debug',
+    性能: '性能', performance: '性能',
+    安全: '安全', security: '安全',
+    mcp: 'MCP',
+    vite: 'vite', esbuild: 'esbuild', tsc: 'TypeScript', typescript: 'TypeScript',
+    react: 'React', vue: 'Vue', node: 'Node', electron: 'Electron',
+    windows: 'Windows', linux: 'Linux', mac: 'macOS',
+  };
+  const tags = new Set<string>();
+  for (const [kw, tag] of Object.entries(tagMap)) {
+    if (c.includes(kw.toLowerCase())) tags.add(tag);
+  }
+
+  return {
+    ...(memoryType ? { memory_type: memoryType } : {}),
+    ...(scope ? { scope } : {}),
+    ...(priority ? { priority } : {}),
+    tags: Array.from(tags),
+  };
 }
 
 export interface RememberResult {
   memory_id: string;
   path: string;
-  created: boolean; // true=新建, false=追加
-  /** Phase 2: 如果 replaces 了某条旧记忆，这里返回旧记忆 id */
+  created: boolean;
   superseded?: string;
+  inferred?: {
+    memory_type?: boolean;
+    scope?: boolean;
+    priority?: boolean;
+    project_id?: boolean;
+    tags?: boolean;
+  };
 }
 
 const MEMORY_TITLE_MAX_LEN = 80;
@@ -48,10 +118,21 @@ export async function remember(args: RememberArgs): Promise<RememberResult> {
   const vault = new VaultManager();
   const now = new Date().toISOString();
 
-  // === scope + memory_type 校验 ===
-  const scope: MemoryScope = args.scope ?? 'project';
-  const memoryType: MemoryType = args.memory_type;
+  // === 自动推断 ===
+  const inferred = inferMemoryMeta(args.content);
+  const memoryType: MemoryType = args.memory_type ?? inferred.memory_type ?? 'semantic';
+  const scope: MemoryScope = args.scope ?? inferred.scope ?? 'project';
+  const priority: MemoryPriority = args.priority ?? inferred.priority ?? 2;
+  const autoTags = inferred.tags ?? [];
+  const mergedTags = args.tags && args.tags.length > 0
+    ? Array.from(new Set([...args.tags, ...autoTags]))
+    : autoTags;
 
+  // project_id 自动推断
+  const autoProjectId = vault.inferProjectId();
+  const projectId = args.project_id ?? autoProjectId;
+
+  // === scope + memory_type 校验 ===
   if (memoryType === 'episodic' && scope === 'shared') {
     throw new Error('episodic memories cannot have scope=shared — session context is project-bound');
   }
@@ -64,9 +145,7 @@ export async function remember(args: RememberArgs): Promise<RememberResult> {
     dirPath = vault.getSharedSemanticDir();
     effectiveProjectId = 'shared';
   } else {
-    const pid = args.project_id;
-    if (!pid) throw new Error('project_id is required for scope=project memories');
-    const safePid = pid.replace(/[\\/]/g, '_'); // 防止路径遍历
+    const safePid = projectId.replace(/[\\/]/g, '_');
     const { episodic, semantic } = await vault.ensureProjectDir(safePid);
     dirPath = memoryType === 'episodic' ? episodic : semantic;
     effectiveProjectId = safePid;
@@ -107,16 +186,15 @@ export async function remember(args: RememberArgs): Promise<RememberResult> {
     created_at: now,
     updated_at: now,
     archived: false,
-    priority: args.priority ?? 2,
+    priority,
     agent: args.agent ?? 'manual',
     session_id: args.session_id,
     reviewed: memoryType === 'semantic' ? false : undefined,
-    tags: args.tags ?? [],
+    tags: mergedTags,
     related_files: args.related_files ?? [],
-    // Phase 2: 双时钟
     valid_from: now,
-    valid_to: undefined, // 当前仍有效
-    supersedes: supersededId, // 如果 replaces 了旧记忆，记录
+    valid_to: undefined,
+    supersedes: supersededId,
   };
 
   // 过滤掉 undefined 字段——js-yaml 不接受
@@ -128,7 +206,22 @@ export async function remember(args: RememberArgs): Promise<RememberResult> {
   logger.info('Remember create:', id, scope, memoryType, supersededId ? `supersedes=${supersededId}` : '', '→', filePath);
   getFtsIndex().upsertByPath(filePath); // FTS5 同步钩子
 
-  return { memory_id: id, path: filePath, created: true, superseded: supersededId };
+  // 哪些字段是推断出来的（agent 没显式传）
+  const inferredFields: RememberResult['inferred'] = {
+    memory_type: !args.memory_type,
+    scope: !args.scope,
+    priority: args.priority === undefined,
+    project_id: !args.project_id,
+    tags: !args.tags || args.tags.length === 0,
+  };
+
+  return {
+    memory_id: id,
+    path: filePath,
+    created: true,
+    superseded: supersededId,
+    inferred: inferredFields,
+  };
 }
 
 /**

@@ -223,19 +223,19 @@ export function createServer(): McpServer {
     'remember',
     {
       description:
-        'Write memory (session context or permanent knowledge) to RecallVault. Creates new entry or appends to existing.',
+        'Write memory to RecallVault. 参数极简：只传 content 即可，memory_type/scope/priority/tags 自动推断。手动覆盖时显式传参。',
       inputSchema: z.object({
-        content: z.string().describe('Memory body in Markdown.'),
-        memory_type: z.enum(['episodic', 'semantic']).describe('episodic = short-term session context; semantic = permanent knowledge.'),
-        scope: z.enum(['project', 'shared']).optional().describe('Default project. episodic always project-only.'),
-        project_id: z.string().optional().describe('Required for scope=project. Folder name under projects/.'),
-        session_id: z.string().optional().describe('Session/task identifier for grouping episodic entries.'),
-        agent: z.enum(['claude-code', 'codex', 'codebuddy', 'trae', 'manual']).optional().describe('Source agent.'),
-        tags: z.array(z.string()).optional().describe('Obsidian-compatible tags (no # prefix).'),
-        related_files: z.array(z.string()).optional().describe('Vault-root-relative paths to related files.'),
-        priority: z.number().min(1).max(3).optional().describe('1=low 2=normal 3=high. Default 2.'),
-        append_to: z.string().optional().describe('Existing memory_id to append content to (instead of creating new).'),
-        replaces: z.string().optional().describe('Phase 2: Existing memory_id that this new memory supersedes. Old memory valid_to is set to now.'),
+        content: z.string().describe('记忆正文（唯一必填）。自动从中推断 type/scope/priority/tags。'),
+        memory_type: z.enum(['episodic', 'semantic']).optional().describe('覆盖推断。默认 semantic（含"session/会话/本次"则 episodic）'),
+        scope: z.enum(['project', 'shared']).optional().describe('覆盖推断。默认 project（含"通用/可复用/跨项目"则 shared）'),
+        project_id: z.string().optional().describe('覆盖推断。默认从 cwd basename 推断'),
+        session_id: z.string().optional().describe('session 分组 id（复用 session_start 返回的值）'),
+        agent: z.enum(['claude-code', 'codex', 'codebuddy', 'trae', 'manual']).optional().describe('来源 agent'),
+        tags: z.array(z.string()).optional().describe('覆盖/追加自动提取的 tags'),
+        related_files: z.array(z.string()).optional().describe('vault-root-relative 相关文件'),
+        priority: z.number().min(1).max(3).optional().describe('覆盖推断。默认 2（含"坑/错误/bug/debug"则自动 3）'),
+        append_to: z.string().optional().describe('追加到已有 memory_id（而非新建）'),
+        replaces: z.string().optional().describe('取代旧记忆：旧 memory_id 的 valid_to 自动设为 now'),
       }),
     },
     wrapHandler('remember', async (args) => {
@@ -244,8 +244,8 @@ export function createServer(): McpServer {
           ...args,
           priority: args.priority as 1 | 2 | 3 | undefined,
         });
-        // 极简确认：保留 path（后续读文件）和 superseded（版本链追踪）
         const compact: any = { ok: true, memory_id: result.memory_id, created: result.created, path: result.path };
+        if (result.inferred) compact.inferred = result.inferred;
         if ((result as any).superseded) compact.superseded = (result as any).superseded;
         return { content: [{ type: 'text', text: JSON.stringify(compact, null, 2) }] };
       } catch (err: any) {
