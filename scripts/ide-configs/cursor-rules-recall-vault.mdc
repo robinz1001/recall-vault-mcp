@@ -1,0 +1,51 @@
+---
+description: RecallVault memory — proactive remember and recall patterns
+alwaysApply: true
+---
+
+# RecallVault — Memory Layer (MCP)
+
+You are connected to RecallVault, a local-first memory layer via MCP. All memories are Markdown files. The MCP server tool is `recall-vault-mcp` (registered as `health_check`, `remember`, `recall`, `list_memories`, `archive_memory`, `update_memory`, `delete_memory`, `set_memory_priority`, `memory_setup`, `memory_import`).
+
+## When to SAVE (call remember) — PROACTIVE, do not wait for user
+
+Call remember immediately after:
+- **Architecture decisions** — what you chose and why (`memory_type: 'semantic'`, `scope: 'project'` or `'shared'`)
+- **Bugs fixed** — cause + solution (`priority: 3`, tag `['regression', 'bugfix']`)
+- **Project conventions** — naming, layout, API style (`scope: 'project'`)
+- **Cross-project patterns** — reusable elsewhere (`scope: 'shared'`)
+- **Session summary** — before the conversation ends (`memory_type: 'episodic'`)
+
+**Params**: `memory_type`, `scope`, `priority` (1=low 2=normal 3=high), `tags`, `project_id` (default workspace basename)
+
+## When to RECALL — PROACTIVE
+
+Call recall with `include_shared=true`:
+- **At the start of a session** — refresh context from prior work
+- **Before starting a related task** — "have we done something like this?"
+- **When debugging** — "what caused similar issues last time?"
+- **When user references prior work** — "before", "previously", "we discussed"
+
+## ⚡ TOKEN-SAVING PATTERN — critical
+
+recall() has compact mode. Use it as default:
+```
+recall({ query: "bug fix", compact: true })   // ~400 tokens — minimal
+recall({ query: "bug fix" })                  // ~960 tokens — full with snippets
+```
+Get compact results, then open Markdown files directly for details via the wikilink returned.
+
+## Context window sizing
+
+Use `context_window_size` param to auto-tune:
+```
+recall({ query: "setup", context_window_size: 32000, compact: true })
+```
+Auto-limits: 16K→5, 32K→8, 64K→12, 128K→20 results.
+
+## Defaults
+
+- `project_id`: workspace folder basename
+- `agent`: set to `'cursor'` 
+- `memory_type`: `'semantic'` for permanent knowledge, `'episodic'` for session context
+- `scope`: `'project'` for project-only, `'shared'` for cross-project reusable knowledge

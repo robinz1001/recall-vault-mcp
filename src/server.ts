@@ -197,12 +197,11 @@ export function createServer(): McpServer {
 
       const info = {
         name: 'recall-vault',
-        version: '0.2.0',
-        status: 'ok',
+        version: '0.4.1',
+        status: dirsOk ? 'ok' : 'degraded',
+        vault_ready: dirsOk,
         vault_path: config.vaultPath,
         vault_root: vault.root,
-        where_are_my_memories: `${vault.root}\\projects\\{project_id}\\episodic\\semantic\\*.md` + `\n${vault.root}\\shared\\semantic\\*.md`,
-        log_level: config.logLevel,
         dirs_ok: dirsOk,
         tools_registered: TOTAL_TOOLS,
         tools: [
@@ -210,6 +209,11 @@ export function createServer(): McpServer {
           'health_check', 'remember', 'recall', 'list_memories', 'archive_memory',
           'update_memory', 'delete_memory', 'set_memory_priority', 'memory_setup', 'memory_import',
         ],
+        // 降级提示：如果 vault 有问题，agent 应该怎么处理
+        degraded: !dirsOk ? {
+          reason: 'vault 目录结构不完整或不可写',
+          action: '提示用户运行 memory_setup() 初始化，或检查 vault_path 环境变量',
+        } : null,
         // Phase 3: Eyes journal backlog
         journal_backlog: getJournalBacklog(),
         suggested_context,

@@ -1,7 +1,7 @@
 ---
 name: recall-vault
 description: |
-  跨会话、跨项目本地记忆管理系统。session_start 强制前置载入上下文，remember 自动推断，recall 优先于 grep。
+  跨会话、跨项目本地记忆管理系统。SessionStart hook 自动注入上下文摘要，remember 自动推断，recall 优先于 grep。
   当你需要记住技术决策、搜索历史记忆、或在新 session 里恢复项目上下文时使用。
   触发词：remember、recall、记忆、回忆、vault、/recall-vault。
 scope: global
@@ -32,9 +32,11 @@ hooks:
 
 ---
 
-## Step 1: session 开始 → 立即调 `session_start`（硬性前置）
+## Step 0: 检查 vault 状态（30 秒）
 
-**不调这个，后面的都别做。** 如果你在 session 中还没调过它，**现在就调**。
+**SessionStart hook 会自动注入压缩摘要到你的上下文里**——那是 vault 最近的高价值记忆，直接用就行。
+
+如果你想更精确（比如要知道 project_status、previous_session、跨项目经验），手动调一次：
 
 ```
 session_start()
@@ -42,13 +44,23 @@ session_start()
 
 拿到返回值后：
 - **记下来 `session_id`** — 后续所有 remember() 复用
-- 扫一眼 `compacted_summary`（约 200 token，省一次 recall）
-- 如果 `recent_high_value` 或 `previous_session` 和当前任务相关 → 继续用 recall 深挖
-- 照做 `suggested_actions`
+- 扫一眼 `compacted_summary` 和 hook 注入的对比，一致就不用深挖
+- `suggested_actions` — 照做就行
 
 ---
 
-## Step 2: 工作中 → 主动 recall + remember
+## Step 1: 工作中 → 主动 recall + remember
+
+### 🔴 Search BEFORE Grep（强制，最本质）
+
+**任何 Grep/Glob 搜代码文件之前，先 recall 搜 vault。**
+
+```
+❌ 错误：Grep("架构决策") — vault 里有，但你可能搜不到
+✅ 正确：recall({ query: "架构决策", compact: true })
+```
+
+vault 是项目知识的**语义索引**——比 grep 更快、更准、更省 token。Grep 只用来搜代码里的字符串字面量。
 
 ### 🔴 Recall BEFORE remember（强制）
 
@@ -58,7 +70,7 @@ session_start()
 // 1. 先搜
 const prev = recall({ query: "<你要存的内容关键词>", compact: true });
 
-// 2. 有近似的 → 用 replaces 取代旧的
+// 2. 有近似的 → 用 replaces 取代旧的（自动设 valid_to + superseded_by）
 if (prev.results.length > 0 && prev.results[0].score > 0.5) {
   remember({ content: "...", replaces: prev.results[0].memory_id });
 } else {
@@ -111,7 +123,7 @@ organize_memories({ mode: "light" })  // 只看建议，不动数据
 
 ---
 
-## Step 3: session 结束 → 调 `session_end`
+## Step 2: session 结束 → 调 `session_end`
 
 **结束前，最后一件事。** 不调也不会丢数据（文件已落盘），但调了能给下次 session 留个"上一次做了啥"的入口。
 
@@ -124,21 +136,36 @@ session_end({
 
 ---
 
+## 🔴 降级策略（MCP 报错时）
+
+```
+MCP 工具报错 / 返回 isError: true
+  → 调 health_check()
+  → 看 degraded 字段：
+    - vault_ready = false → 提示用户：vault 目录有问题，运行 memory_setup() 或检查 vault_path
+    - vault_ready = true 但工具报错 → 提示用户 MCP server 可能没启动好
+  → 不要阻塞工作流，继续用普通 Grep/Glob 搜代码
+```
+
+hook 注入的压缩摘要 **永远可用**——它直接读 vault 文件，不依赖 MCP server。
+
+---
+
 ## 13 个 MCP 工具速查
 
 | 工具 | 什么时候用 |
 |---|---|
-| **session_start** | ⭐ **每次 session 第一件事（硬性前置）** |
-| **session_end** | ⭐ **每次 session 结束前** |
+| session_start | ⭐ session 开始想精确知道 project_status / previous_session |
+| session_end | ⭐ session 结束前存一个 episodic 摘要 |
 | remember | recall before remember → 有近似就 replaces，没有就新建 |
-| recall | 新任务前、用户提"之前"、debug 卡壳。默认 compact:true |
+| recall | **搜 vault 记忆（优先于 Grep）**。默认 compact:true |
 | organize_memories | vault 开始乱了。light=dry-run，deep=执行 |
 | list_memories | 盘点 vault（少用） |
 | update_memory | 更新已有记忆（少用，优先 remember + replaces） |
 | archive_memory | 软删除（不物理删） |
 | delete_memory | ⚠️ 永久删除（慎重） |
 | set_memory_priority | 快速调优先级（少用） |
-| health_check | 诊断 vault 状态 |
+| health_check | 诊断 vault 状态；MCP 报错时看 degraded |
 | memory_setup | 初始化 vault（首次） |
 | memory_import | 从 docs/ 导入文档 |
 
@@ -150,7 +177,7 @@ Hook 是最后防线。如果你（agent）主动 remember/recall 了，hook 不
 
 | Hook | 打扰级别 | 说明 |
 |---|---|---|
-| SessionStart | 轻 | 自动注入 vault 摘要（给你上下文，不是阻断） |
+| **SessionStart** | 轻 | ✅ 自动注入 vault 压缩摘要（直接用，不是阻断） |
 | PostToolUse | 极轻 | 只有 test_pass 才推 hint，其他静默写 marker |
 | Stop | 极少 | 只拦 priority≥3 + 冷却期外 |
 
@@ -159,8 +186,9 @@ Hook 是最后防线。如果你（agent）主动 remember/recall 了，hook 不
 ## 决策优先级
 
 ```
-1. session_start 强制前置 → 跳过 = 你没按剧本走
-2. Recall before remember → 避免重复
+1. Search before Grep — vault 是唯一知识入口
+2. Recall before remember — 避免重复
 3. recall 空结果 → 明确说没有，别瞎编
-4. 不确定该不该 remember？→ 花 >1min 才搞定的 → 存
+4. MCP 报错 → health_check → 降级 → 继续工作
+5. 不确定该不该 remember？→ 花 >1min 才搞定的 → 存
 ```
