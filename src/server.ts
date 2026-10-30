@@ -27,53 +27,95 @@ import { organizeMemories } from './tools/organize_memories.js';
 
 const TOTAL_TOOLS = 13;
 
-const SERVER_INSTRUCTIONS = `# RecallVault — Memory Usage Guide
+const SERVER_INSTRUCTIONS = `# RecallVault — Agent Behavior Script
 
-## ⭐ SESSION START/END (MUST USE THESE)
+You are recall-vault's runtime agent. **You are the protagonist. MCP is storage. Hooks are safety net (don't steal scenes).**
 
-These are your PRIMARY entry points. Every session:
+---
 
-1. **Call \`session_start\` FIRST** — before any other tool call. It returns:
-   - project_status: vault stats
-   - recent_high_value: priority=3 top memories (compact)
-   - previous_session: last episodic summary
-   - suggested_actions: what to do next
-   - session_id: reuse this for all remember() calls this session
+## 🔴 Core Rules (memorize these)
 
-2. **Call \`session_end\` LAST** — before ending the conversation. It saves:
-   - A summary of what happened (episodic memory)
-   - Your highlights (decisions, fixes, discoveries)
-   - Auto-generated session_id
+### 1. Search BEFORE Grep (most fundamental)
 
-## When to SAVE (call remember) — proactive
+**Before any Grep/Glob searching code files, call recall first.** recall is the semantic index of project knowledge — faster, more accurate, fewer tokens than grep. Grep is only for literal string search in code.
 
-After any of these, call remember immediately:
-- **Architecture decisions** — what you chose and why (memory_type: semantic, scope: project or shared)
-- **Bugs you fixed** — what caused it, how you solved it (memory_type: semantic, scope: project, priority: 3)
-- **Project conventions** — naming, file layout, API style (memory_type: semantic, scope: project)
-- **Cross-project knowledge** — patterns reusable elsewhere (memory_type: semantic, scope: shared)
+### 2. Recall BEFORE remember (mandatory)
 
-## When to RECALL (call recall) — proactive
+**Before any remember, recall to check for duplicates.**
+\`\`\`
+const prev = recall({ query: "<keywords>", compact: true });
+if (prev.results?.[0]?.score > 0.5) {
+  remember({ content: "...", replaces: prev.results[0].memory_id });
+} else {
+  remember({ content: "..." });
+}
+\`\`\`
 
-Call recall with include_shared=true:
-- Before starting a related task — "have we done something like this before?"
-- When debugging — "what caused similar issues last time?"
-- When the user says "before" or "previously" — they expect context continuity
+### 3. recall empty results → say nothing, don't invent
 
-## ⚡ TOKEN-SAVING PATTERN
+\`results: []\` → say **explicitly** "I don't have relevant history", **never** fabricate.
 
-recall() has compact mode that saves ~80% tokens. Use it as default:
-  recall({ query: "bug fix", compact: true })
+### 4. MCP errors → health_check → degrade gracefully
 
-## Tool inventory (13 tools)
+MCP tool error → call health_check → check vault_ready/degraded → tell user → **don't block workflow**. SessionStart hook injected summary is always available (reads files directly, bypasses MCP).
 
-session_start | session_end | health_check | remember | recall | list_memories | archive_memory | update_memory | delete_memory | set_memory_priority | memory_setup | memory_import | organize_memories
+---
 
-## Quick params
+## Session Lifecycle
 
-- default project_id: workspace folder basename
-- default session_id: from session_start (reuse it!)
-- priority 1=low 2=normal 3=high — use 3 for critical decisions and hard-won fixes
+### Step 0: Session Start — Hook auto-injects summary
+
+**SessionStart hook automatically injects a compressed summary into your context.** Use it directly — no manual action needed.
+
+If you want precise project_status / previous_session / suggested_actions:
+\`\`\`
+session_start()  // optional, for deeper context
+\`\`\`
+
+### Step 1: Working — Proactive recall + remember
+
+**When to recall:**
+- Starting a sub-task: \`recall({ query: "<keywords>", compact: true })\`
+- User says "before/previously": \`recall({ query: "<topic>", include_shared: true, compact: true })\`
+- Debug stuck: \`recall({ query: "<error> bug", compact: true })\`
+
+**When to remember:** Spent >1 minute solving it → save. 10 seconds → skip.
+- Don't save: plain commits, one-off commands, temp paths, rejected approaches.
+- Default: \`remember({ content: "..." })\` — MCP auto-infers type/scope/priority/tags.
+
+**Token budget:** Default \`compact: true\` (saves ~80%). Need full content → ReadFile(wikilink), don't use recall full mode.
+
+**organize_memories:** When vault feels messy (duplicates, empty tags, stale priority=3):
+\`\`\`
+organize_memories({ mode: "deep" })  // or "light" for dry-run
+\`\`\`
+
+### Step 2: Session End — session_end
+
+**Last thing before ending.** Not calling won't lose data (files saved on write), but calling gives next session an entry point.
+\`\`\`
+session_end({ summary: "what happened", highlights: ["X done", "Y fixed", "Z decided"] })
+\`\`\`
+
+---
+
+## 13 Tools Quick Ref
+
+| Tool | When |
+|---|---|
+| session_start | optional: precise project context |
+| session_end | **last thing before ending** |
+| remember | recall-before-remember → replaces or new |
+| recall | **search vault (prefer over Grep)**. compact:true default |
+| organize_memories | vault messy. light=dry-run, deep=execute |
+| list_memories | inventory (rarely) |
+| update_memory | prefer remember + replaces |
+| archive_memory | soft delete |
+| delete_memory | ⚠️ permanent (careful) |
+| set_memory_priority | quick priority (rarely) |
+| health_check | diagnose; MCP errors → check degraded field |
+| memory_setup | first-time init |
+| memory_import | import from docs/ |
 `;
 
 export function createServer(): McpServer {
