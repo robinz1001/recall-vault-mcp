@@ -1,6 +1,6 @@
 ---
 name: recall-vault
-version: 0.4.9
+version: 0.4.11
 description: |
   跨会话、跨项目本地记忆管理系统。SessionStart hook 自动注入上下文摘要，remember 自动推断，recall 优先于 grep。
   当你需要记住技术决策、搜索历史记忆、或在新 session 里恢复项目上下文时使用。
@@ -187,7 +187,7 @@ hook 注入的压缩摘要 **永远可用**——它直接读 vault 文件，不
 
 ---
 
-## 13 个 MCP 工具速查
+## 15 个 MCP 工具速查
 
 | 工具 | 什么时候用 |
 |---|---|
@@ -195,7 +195,9 @@ hook 注入的压缩摘要 **永远可用**——它直接读 vault 文件，不
 | session_end | ⭐ session 结束前存一个 episodic 摘要 |
 | remember | recall before remember → 有近似就 replaces，没有就新建 |
 | recall | **搜 vault 记忆（优先于 Grep）**。默认 compact:true |
-| organize_memories | vault 开始乱了。light=dry-run，deep=执行 |
+| snapshot_list | **看项目画像快照**（_snapshot/ 下 4 个固定文件） |
+| snapshot_update | **更新快照文件**（覆盖式，下次 session 自动注入） |
+| organize_memories | vault 开始乱了。light=dry-run，deep=执行（含 raw→distill 归档） |
 | list_memories | 盘点 vault（少用） |
 | update_memory | 更新已有记忆（少用，优先 remember + replaces） |
 | archive_memory | 软删除（不物理删） |
@@ -239,6 +241,69 @@ for (const t of targets.files) {
 ```
 
 **为什么蒸馏？** 原文镜像会导致：38 份冗余记忆稀释高价值事实、hook 摘要被 import 污染、token 占用膨胀。蒸馏后 vault 里只有精炼的知识要点——和你手写的记忆同质量。
+
+---
+
+## 📋 结构化快照（v0.4.11 新增）
+
+对标 Cline Memory Bank —— **确定性内容用固定格式存，不靠 recall 搜**。
+
+### 为什么需要快照？
+
+semantic 记忆是**自由格式**，agent 靠 recall 搜。但有些内容**每次 session 都需要**：项目是什么、用什么技术栈、核心架构、红线规则——这些不该每次都 recall，应该**默认注入**。
+
+### 4 个固定文件
+
+快照存在 `projects/{project_id}/_snapshot/`，目录首次访问自动创建（模板占位）：
+
+| 文件 | 内容 | 模板状态判断 |
+|------|------|-------------|
+| `project.md` | 项目画像、目标（3-5 条 checkbox）、非目标 | 含 `<!-- 一句话描述` + `<!-- 3-5 条` → 空模板 |
+| `stack.md` | 技术栈表格（层/技术/版本） | 含 `| 层 | 技术 |` + <!-- 注释 → 空模板 |
+| `architecture.md` | 分层、关键组件表、依赖方向 | 含 `| 组件 | 职责 | 位置 |` → 空模板 |
+| `conventions.md` | 命名规则、红线 R1-R10（带代码位置）、验证方式 | 含 `R1: XXX` 占位符 → 空模板 |
+
+### 🔴 快照写入规则（强制）
+
+**首次接触项目 → 先建快照再开干。** 模板占位等于没有快照——hook 不会注入空模板。
+
+```typescript
+// Step 0 之后，session_start 之前：
+const snap = snapshot_list({ workspace_path: "<项目路径>" });
+
+// 如果返回 note 说"空模板" → 填！
+if (snap.note?.includes('空模板')) {
+  snapshot_update({
+    file: "stack",
+    body: `# 技术栈\n\n| 层 | 技术 | 版本 |\n|---|---|---|\n| 语言 | TypeScript | 5.x |\n| 运行时 | Node.js | 22+ |\n| ... | ... | ... |`,
+    workspace_path: "<项目路径>",
+  });
+  // 依次填 project / architecture / conventions
+}
+```
+
+**什么时候更新快照？**
+
+| 事件 | 更新哪个 |
+|------|---------|
+| 项目从 TS 切到 JS | `stack.md` |
+| 新增/删除关键组件 | `architecture.md` |
+| 新加红线 R11 | `conventions.md` |
+| 目标变了（比如加了 iOS） | `project.md` |
+
+**更新方式**：`snapshot_update({ file, body, workspace_path })` — 覆盖式，全量替换。
+
+### 快照 vs semantic 的分工
+
+```
+┌─ 快照（_snapshot/）────────────┐  ┌─ semantic（semantic/）──────────┐
+│ 固定 4 文件，hook 默认注入       │  │ 自由格式，靠 recall 搜索         │
+│ 确定性：是什么、用什么、红线     │  │ 变化的：决策记录、踩坑经验、方案 │
+│ 低 token（< 50）               │  │ 数量大（可能 50+）               │
+│ 对标 Cline Memory Bank          │  │ 对标 Supermemory Memories       │
+└────────────────────────────────┘  └────────────────────────────────┘
+   不需要 recall 就能用                  需要 recall 按需检索
+```
 
 ---
 

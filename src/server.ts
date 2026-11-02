@@ -24,8 +24,9 @@ import { memoryImport } from './tools/memory_import.js';
 import { sessionStart } from './tools/session_start.js';
 import { sessionEnd } from './tools/session_end.js';
 import { organizeMemories } from './tools/organize_memories.js';
+import { snapshotSummary, readSnapshot, writeSnapshot, SNAPSHOT_FILES } from './tools/snapshot.js';
 
-const TOTAL_TOOLS = 13;
+const TOTAL_TOOLS = 15;
 
 const SERVER_INSTRUCTIONS = `# RecallVault — Agent Behavior Script
 
@@ -645,6 +646,77 @@ export function createServer(): McpServer {
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (err: any) {
         return { isError: true, content: [{ type: 'text', text: `organize_memories failed: ${err.message}` }] };
+      }
+    }),
+  );
+
+  // === snapshot_list ===
+  server.registerTool(
+    'snapshot_list',
+    {
+      description:
+        '读取项目结构化快照（_snapshot/ 下 4 个固定文件：project.md / stack.md / architecture.md / conventions.md）。快照是 Cline Memory Bank 风格的确定性内容，每次 session start 时自动注入。',
+      inputSchema: z.object({
+        project_id: z.string().optional().describe('默认自动推断'),
+        workspace_path: z.string().optional().describe('v0.4.6+: 项目路径，用于推断正确的 project_id'),
+      }),
+    },
+    wrapHandler('snapshot_list', async (args) => {
+      try {
+        const vault = new VaultManager();
+        const pid = args.project_id ?? vault.inferProjectId(args.workspace_path);
+        const summary = await snapshotSummary(pid, vault);
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              project_id: pid,
+              files: summary?.files ?? [],
+              condensed: summary?.condensed ?? null,
+              est_tokens: summary?.est_tokens ?? 0,
+              note: summary ? `快照可用。项目画像摘要会自动注入下次 session start。` : '快照目录是空的或全是模板。先用 snapshot_update 填入内容。',
+            }, null, 2),
+          }],
+        };
+      } catch (err: any) {
+        return { isError: true, content: [{ type: 'text', text: `snapshot_list failed: ${err.message}` }] };
+      }
+    }),
+  );
+
+  // === snapshot_update ===
+  server.registerTool(
+    'snapshot_update',
+    {
+      description:
+        '更新单个快照文件（覆盖式）。快照是项目的确定性结构化画像：项目/技术栈/架构/约定。更新后下次 session start 自动注入。',
+      inputSchema: z.object({
+        file: z.enum(['project', 'stack', 'architecture', 'conventions']).describe('要更新哪个快照文件'),
+        body: z.string().min(10, '快照正文至少 10 字').describe('完整 Markdown 正文（带或不带 frontmatter 都行）'),
+        project_id: z.string().optional().describe('默认自动推断'),
+        workspace_path: z.string().optional().describe('v0.4.6+: 项目路径'),
+      }),
+    },
+    wrapHandler('snapshot_update', async (args) => {
+      try {
+        const vault = new VaultManager();
+        const pid = args.project_id ?? vault.inferProjectId(args.workspace_path);
+        const file = args.file;
+        const result = await writeSnapshot(vault, pid, file, args.body);
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              ok: true,
+              project_id: pid,
+              file,
+              path: result.path,
+              next_step: '下次 session start 自动注入。',
+            }, null, 2),
+          }],
+        };
+      } catch (err: any) {
+        return { isError: true, content: [{ type: 'text', text: `snapshot_update failed: ${err.message}` }] };
       }
     }),
   );

@@ -91,14 +91,16 @@ export class VaultManager {
   }
 
   /** 获取项目专属目录，自动创建 */
-  async ensureProjectDir(projectId: string): Promise<{ episodic: string; semantic: string }> {
+  async ensureProjectDir(projectId: string): Promise<{ episodic: string; semantic: string; snapshot: string }> {
     // 安全：project_id 不能包含路径遍历
     const safeId = path.basename(projectId);
     const episodic = path.join(this.projectsDir, safeId, 'episodic');
     const semantic = path.join(this.projectsDir, safeId, 'semantic');
+    const snapshot = path.join(this.projectsDir, safeId, '_snapshot');
     await fs.mkdir(episodic, { recursive: true });
     await fs.mkdir(semantic, { recursive: true });
-    return { episodic, semantic };
+    await fs.mkdir(snapshot, { recursive: true });
+    return { episodic, semantic, snapshot };
   }
 
   /** shared/semantic 目录（已在 ensureStructure 中创建） */
