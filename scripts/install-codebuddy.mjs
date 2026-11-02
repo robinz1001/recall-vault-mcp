@@ -72,7 +72,7 @@ console.log('  ✅ ' + skillDest);
 
 console.log('\n[3/4] 写入 MCP 配置（~/.codebuddy/.mcp.json + mcp.json 双保险）...');
 
-const newServer = { command: 'npx', args: ['-y', 'recall-vault-mcp'] };
+const newServer = { type: 'stdio', command: 'npx', args: ['-y', 'recall-vault-mcp'] };
 const mcpTargets = [
   join(homedir, '.codebuddy', '.mcp.json'),  // 标准用户级（有点前缀）
   join(homedir, '.codebuddy', 'mcp.json'),   // CodeBuddy 也可能读这个（无点前缀）

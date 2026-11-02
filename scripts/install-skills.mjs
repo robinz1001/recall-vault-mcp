@@ -77,6 +77,7 @@ function hookAbsPath(filename) {
 // ── 统一 MCP 配置（所有 IDE 通用，用户级）────────────────────────────────
 
 const MCP_CONFIG = {
+  type: 'stdio',
   command: 'npx',
   args: ['-y', 'recall-vault-mcp'],
 };
