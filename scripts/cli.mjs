@@ -232,7 +232,15 @@ RecallVault CLI
 
 if (!sub || sub === '--help' || sub === '-h') { console.log(HELP); process.exit(0); }
 
-const handlers = { init: cmdInit, doctor: cmdDoctor, remember: cmdRemember, recall: cmdRecall, list: cmdList, archive: cmdArchive };
+const handlers = {
+  init: cmdInit,
+  doctor: cmdDoctor,
+  'health-check': cmdDoctor,  // alias
+  remember: cmdRemember,
+  recall: cmdRecall,
+  list: cmdList,
+  archive: cmdArchive,
+};
 const handler = handlers[sub];
 if (!handler) { console.error(`❌ 未知子命令: ${sub}`); console.log(HELP); process.exit(1); }
 

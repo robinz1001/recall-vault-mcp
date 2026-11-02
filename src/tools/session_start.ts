@@ -20,6 +20,8 @@ import { config } from '../config.js';
 
 export interface SessionStartArgs {
   project_id?: string;
+  /** v0.4.5: agent 显式传入当前 workspace 路径 — 最可靠的 project_id 推断来源 */
+  workspace_path?: string;
 }
 
 export interface SessionStartResult {
@@ -90,7 +92,7 @@ export async function sessionStart(args: SessionStartArgs = {}): Promise<Session
   const vault = new VaultManager();
   await vault.ensureStructure();
 
-  const projectId = args.project_id ?? vault.inferProjectId();
+  const projectId = args.project_id ?? vault.inferProjectId(args.workspace_path);
   const sessionId = `sess_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`;
 
   // 扫描所有有效记忆

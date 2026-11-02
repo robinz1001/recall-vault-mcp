@@ -1,5 +1,6 @@
 ---
 name: recall-vault
+version: 0.4.6
 description: |
   跨会话、跨项目本地记忆管理系统。SessionStart hook 自动注入上下文摘要，remember 自动推断，recall 优先于 grep。
   当你需要记住技术决策、搜索历史记忆、或在新 session 里恢复项目上下文时使用。
@@ -36,14 +37,36 @@ hooks:
 
 **SessionStart hook 会自动注入压缩摘要到你的上下文里**——那是 vault 最近的高价值记忆，直接用就行。
 
+### 🔴 必须传 workspace_path（强制，v0.4.6 新增）
+
+MCP server 是单例长驻进程，它的 cwd 固定在 IDE 启动目录，**无法自动感知你当前在哪个项目**。
+如果不传 workspace_path，session_start 推断的 project_id 可能是你的用户名（比如 `robin`）——这会导致所有记忆存错位置。
+
+**你知道自己在哪个项目里工作。** 所有 MCP tool 调用 **必须传 workspace_path**：
+
+```
+// 正确：从你当前的 workspace 路径推断
+session_start({ workspace_path: "d:/Users/robin/source/wmetasoft/tournament-master" })
+remember({ content: "...", workspace_path: "d:/Users/robin/source/wmetasoft/tournament-master" })
+recall({ query: "...", workspace_path: "d:/Users/robin/source/wmetasoft/tournament-master", compact: true })
+
+// 错误：不传 → 可能被推断成用户名
+session_start()  // ❌ project_id 变成 "robin"
+```
+
+**怎么拿到 workspace_path？** 你（agent）从 Trae 的 prompt 上下文就能知道当前项目目录（cwd、当前打开文件路径、session environment）。
+
+### session_start 拿到后做什么
+
 如果你想更精确（比如要知道 project_status、previous_session、跨项目经验），手动调一次：
 
 ```
-session_start()
+session_start({ workspace_path: "<你的项目绝对路径>" })
 ```
 
 拿到返回值后：
 - **记下来 `session_id`** — 后续所有 remember() 复用
+- **记下来 `project_id`** — 后续所有 remember/recall 也可以直接传这个（省得每次传 workspace_path）
 - 扫一眼 `compacted_summary` 和 hook 注入的对比，一致就不用深挖
 - `suggested_actions` — 照做就行
 

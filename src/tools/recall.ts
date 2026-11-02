@@ -23,6 +23,8 @@ export type RecallSortBy = 'relevance' | 'priority' | 'time_desc' | 'time_asc';
 export interface RecallArgs {
   query: string;
   project_id?: string;
+  /** v0.4.5: agent 显式传入当前 workspace 路径 — 推断 project_id 最可靠 */
+  workspace_path?: string;
   memory_type?: MemoryType | 'all';
   include_shared?: boolean;
   tags?: string[];
@@ -98,8 +100,14 @@ export async function recall(args: RecallArgs): Promise<RecallResult> {
   const limit = Math.min(Math.max(baseLimit, 1), MAX_LIMIT);
   const sortBy: RecallSortBy = args.sort_by ?? 'relevance';
 
+  // workspace_path → 推断 project_id（如果没显式传 project_id）
+  const resolvedProjectId = args.project_id ?? (args.workspace_path ? vault.inferProjectId(args.workspace_path) : undefined);
+  const resolvedArgs: RecallArgs = resolvedProjectId !== undefined
+    ? { ...args, project_id: resolvedProjectId }
+    : args;
+
   // === Step 1: 确定搜索范围 ===
-  const searchDirs = await buildSearchDirs(vault, args);
+  const searchDirs = await buildSearchDirs(vault, resolvedArgs);
   const includedShared = searchDirs.some((d) => d.includes('shared'));
 
   // === Step 2: 收集并过滤候选（walk + 所有 filter 逻辑）===

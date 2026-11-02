@@ -35,6 +35,19 @@ You are recall-vault's runtime agent. **You are the protagonist. MCP is storage.
 
 ## 🔴 Core Rules (memorize these)
 
+### 0. Always pass project_id (non-negotiable)
+
+**IDE 不把当前工作区路径传给 MCP server** —— Trae/CodeBuddy 的 MCP config 有固定 cwd，不管你打开哪个项目 cwd 都一样。MCP 的 \`inferProjectId()\` 可能返回错误的项目名。
+
+**YOU KNOW WHAT PROJECT YOU ARE IN.** Every tool call that takes \`project_id\` (session_start, remember, recall, session_end, list_memories, archive_memory, update_memory, delete_memory, set_memory_priority) **MUST** include it. Derive it from the workspace folder you're working in.
+
+\`\`\`
+const PROJECT_ID = path.basename(workspace_folder);  // or: git rev-parse --show-toplevel
+session_start({ project_id: PROJECT_ID });
+remember({ content: "...", project_id: PROJECT_ID });
+recall({ query: "...", project_id: PROJECT_ID });
+\`\`\`
+
 ### 1. Search BEFORE Grep (most fundamental)
 
 **Before any Grep/Glob searching code files, call recall first.** recall is the semantic index of project knowledge — faster, more accurate, fewer tokens than grep. Grep is only for literal string search in code.
@@ -118,9 +131,14 @@ session_end({ summary: "what happened", highlights: ["X done", "Y fixed", "Z dec
 | memory_import | import from docs/ |
 `;
 
+// 从 package.json 读版本号（构建时已安装依赖）
+import { createRequire } from 'node:module';
+const _require = createRequire(import.meta.url);
+const _pkg = _require('../package.json');
+
 export function createServer(): McpServer {
   const server = new McpServer(
-    { name: 'recall-vault', version: '0.2.0' },
+    { name: 'recall-vault', version: _pkg.version },
     { instructions: SERVER_INSTRUCTIONS },
   );
 
@@ -239,7 +257,7 @@ export function createServer(): McpServer {
 
       const info = {
         name: 'recall-vault',
-        version: '0.4.1',
+        version: _pkg.version,
         status: dirsOk ? 'ok' : 'degraded',
         vault_ready: dirsOk,
         vault_path: config.vaultPath,
@@ -289,7 +307,8 @@ export function createServer(): McpServer {
         content: z.string().describe('记忆正文（唯一必填）。自动从中推断 type/scope/priority/tags。'),
         memory_type: z.enum(['episodic', 'semantic']).optional().describe('覆盖推断。默认 semantic（含"session/会话/本次"则 episodic）'),
         scope: z.enum(['project', 'shared']).optional().describe('覆盖推断。默认 project（含"通用/可复用/跨项目"则 shared）'),
-        project_id: z.string().optional().describe('覆盖推断。默认从 cwd basename 推断'),
+        project_id: z.string().optional().describe('覆盖推断。不传则从 workspace_path 或 cwd 推断'),
+        workspace_path: z.string().optional().describe('v0.4.5: agent 当前 workspace 路径 — 推断 project_id 最可靠来源'),
         session_id: z.string().optional().describe('session 分组 id（复用 session_start 返回的值）'),
         agent: z.enum(['claude-code', 'codex', 'codebuddy', 'trae', 'manual']).optional().describe('来源 agent'),
         tags: z.array(z.string()).optional().describe('覆盖/追加自动提取的 tags'),
@@ -323,6 +342,7 @@ export function createServer(): McpServer {
       inputSchema: z.object({
         query: z.string().describe('Natural language query or keywords.'),
         project_id: z.string().optional().describe('Project to search. If omitted, searches all.'),
+        workspace_path: z.string().optional().describe('v0.4.5: agent 当前 workspace 路径 — 推断 project_id，不传则搜全部'),
         memory_type: z.enum(['episodic', 'semantic', 'all']).optional().describe('Default all.'),
         include_shared: z.boolean().optional().describe('Also search shared/semantic. Default false.'),
         tags: z.array(z.string()).optional().describe('Filter by tags (AND: all must match).'),
@@ -541,7 +561,8 @@ export function createServer(): McpServer {
       description:
         'Session 启动入口（inhale）—— 新 session 的**第一件事**就调这个。一次返回 vault 状态、高价值记忆 Top 3、上一个 session 摘要、suggested_actions。返回的 session_id 后续 remember 复用。',
       inputSchema: z.object({
-        project_id: z.string().optional().describe('不传则自动从 cwd 推断'),
+        project_id: z.string().optional().describe('不传则自动从 workspace_path 或 cwd 推断'),
+        workspace_path: z.string().optional().describe('v0.4.5: agent 当前 workspace 路径 — 推断 project_id 最可靠来源'),
       }),
     },
     wrapHandler('session_start', async (args) => {

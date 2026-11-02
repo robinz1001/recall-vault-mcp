@@ -27,6 +27,8 @@ export interface RememberArgs {
   scope?: MemoryScope;
   /** v0.4.0: 可选。不传则从 cwd 自动推断 */
   project_id?: string;
+  /** v0.4.5: agent 显式传入当前 workspace 路径 — 推断 project_id 最可靠 */
+  workspace_path?: string;
   session_id?: string;
   agent?: MemoryAgent;
   /** v0.4.0: 可选。不传则从 content 自动提取 */
@@ -129,7 +131,7 @@ export async function remember(args: RememberArgs): Promise<RememberResult> {
     : autoTags;
 
   // project_id 自动推断
-  const autoProjectId = vault.inferProjectId();
+  const autoProjectId = vault.inferProjectId(args.workspace_path);
   const projectId = args.project_id ?? autoProjectId;
 
   // === scope + memory_type 校验 ===

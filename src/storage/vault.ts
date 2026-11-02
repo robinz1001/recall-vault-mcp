@@ -108,28 +108,91 @@ export class VaultManager {
 
   /**
    * 推断当前项目 ID。
-   * 优先级：COA_PROJECT_ID → IDE 注入的项目路径 env → cwd 的 basename。
-   * 去掉非法字符（保留字母数字 _ -），确保作为目录名安全。
    *
-   * 关键：不能只用 process.cwd() —— Trae/CodeBuddy 的 MCP 配置自动填 cwd，
-   * 不管打开哪个项目 cwd 都是一个固定路径。必须优先用 IDE 注入的 env 变量。
+   * 优先级（从最可靠到最不可靠）：
+   *   1. workspacePath 参数（agent 显式传 —— 最可靠，因为 agent 知道自己在哪个项目）
+   *   2. COA_PROJECT_ID 环境变量
+   *   3. IDE 注入的项目路径 env（**不可靠！** Trae 等不注入）
+   *   4. git root basename（从 workspacePath 或 cwd 向上找）
+   *   5. package.json "name" 字段
+   *   6. basename（workspacePath → cwd，fallback）
+   *
+   * @param workspacePath agent 显式传入的当前 workspace 路径（可选）
    */
-  inferProjectId(): string {
+  inferProjectId(workspacePath?: string): string {
+    // 1. workspacePath override — 最可靠，agent 知道自己在哪个项目
+    if (workspacePath && workspacePath.trim()) {
+      const wp = workspacePath.trim();
+      // 先从 workspacePath 找 git root
+      const gitRoot = this.findGitRoot(wp);
+      if (gitRoot) return this.sanitize(path.basename(gitRoot));
+      // 再从 workspacePath 找 package.json
+      try {
+        const pkgPath = path.join(wp, 'package.json');
+        const pkgContent = require('node:fs').readFileSync(pkgPath, 'utf-8');
+        const pkg = JSON.parse(pkgContent);
+        if (pkg.name) return this.sanitize(pkg.name.replace(/^@[^/]+\//, ''));
+      } catch { /* 没有 package.json */ }
+      // 直接用 basename
+      return this.sanitize(path.basename(wp));
+    }
+
+    // 2. 环境变量 COA_PROJECT_ID
     const envOverride = process.env.COA_PROJECT_ID;
-    // IDE 注入的项目根目录（跨 IDE 兼容，和 hook 脚本同源）
-    const ideProjectDir =
-      process.env.TRAE_PROJECT_DIR ||
-      process.env.CODEBUDDY_PROJECT_DIR ||
-      process.env.CLAUDE_PROJECT_DIR ||
-      process.env.CODEX_PROJECT_DIR ||
-      process.env.WINDSURF_PROJECT_DIR ||
-      process.env.OPENCODE_PROJECT_DIR;
-    const raw =
-      envOverride ??
-      (ideProjectDir ? path.basename(ideProjectDir) : null) ??
-      path.basename(process.cwd());
-    // 安全化：去掉非法目录名字符
+    if (envOverride) return this.sanitize(envOverride);
+
+    // 3. IDE env（不可靠，但有就用）
+    const IDE_PROJECT_ENVS = [
+      'TRAE_PROJECT_DIR', 'CODEBUDDY_PROJECT_DIR', 'CLAUDE_PROJECT_DIR',
+      'CODEX_PROJECT_DIR', 'WINDSURF_PROJECT_DIR', 'OPENCODE_PROJECT_DIR',
+    ];
+    for (const env of IDE_PROJECT_ENVS) {
+      const val = process.env[env];
+      if (val && val.trim()) return this.sanitize(path.basename(val.trim()));
+    }
+
+    // 4. git root basename
+    const gitRoot = this.findGitRoot();
+    if (gitRoot) return this.sanitize(path.basename(gitRoot));
+
+    // 5. package.json name
+    try {
+      const pkgPath = path.join(process.cwd(), 'package.json');
+      const pkgContent = require('node:fs').readFileSync(pkgPath, 'utf-8');
+      const pkg = JSON.parse(pkgContent);
+      if (pkg.name) return this.sanitize(pkg.name.replace(/^@[^/]+\//, ''));
+    } catch { /* 没有 package.json */ }
+
+    // 6. cwd basename
+    return this.sanitize(path.basename(process.cwd()));
+  }
+
+  private sanitize(raw: string): string {
     return raw.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || 'default';
+  }
+
+  /**
+   * 向上查找 .git 目录的父目录。
+   * 从 startPath（或 process.cwd()）开始往上走，最多 10 层。
+   * 返回 git root 绝对路径，没找到返回 null。
+   */
+  private findGitRoot(startPath?: string): string | null {
+    try {
+      const fs = require('node:fs');
+      let dir = startPath && startPath.trim() ? startPath.trim() : process.cwd();
+      const root = path.parse(dir).root;
+      for (let i = 0; i < 10 && dir !== root; i++) {
+        const gitDir = path.join(dir, '.git');
+        try {
+          const stat = fs.statSync(gitDir);
+          if (stat.isDirectory()) return dir;
+          // .git 也可以是指向 gitdir: 的文件（submodule/worktree）
+          if (stat.isFile()) return dir;
+        } catch { /* 不存在，继续往上 */ }
+        dir = path.dirname(dir);
+      }
+    } catch { /* 权限等问题 */ }
+    return null;
   }
 
   /** 返回项目 episodic 目录路径（不自动创建） */
