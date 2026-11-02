@@ -269,6 +269,7 @@ export function createServer(): McpServer {
           'session_start', 'session_end', 'organize_memories',
           'health_check', 'remember', 'recall', 'list_memories', 'archive_memory',
           'update_memory', 'delete_memory', 'set_memory_priority', 'memory_setup', 'memory_import',
+          'snapshot_list', 'snapshot_update',
         ],
         // 降级提示：如果 vault 有问题，agent 应该怎么处理
         degraded: !dirsOk ? {
