@@ -1,6 +1,6 @@
 ---
 name: recall-vault
-version: 0.4.6
+version: 0.4.9
 description: |
   跨会话、跨项目本地记忆管理系统。SessionStart hook 自动注入上下文摘要，remember 自动推断，recall 优先于 grep。
   当你需要记住技术决策、搜索历史记忆、或在新 session 里恢复项目上下文时使用。
@@ -150,12 +150,25 @@ organize_memories({ mode: "light" })  // 只看建议，不动数据
 
 **结束前，最后一件事。** 不调也不会丢数据（文件已落盘），但调了能给下次 session 留个"上一次做了啥"的入口。
 
+### 🔴 Episodic 正文强制（强制，v0.4.9 新增）
+
+**Episodic 记忆的正文必须有实际内容**——不能只有一个空的 "## Highlights" 标题。空摘要等于白写，下次 session 读不到任何有用信息。
+
 ```typescript
+// ✅ 正确：有实际内容
 session_end({
-  summary: "本次 session 做了什么",
-  highlights: ["完成了 X", "修复了 Y", "决定了 Z"],
+  summary: "本次 session 完成了 recall-vault MCP 跨 IDE 安装调试",
+  highlights: ["修复 bin/recall-vault-mcp.mjs 参数透传 bug", "CodeBuddy 需 type:stdio 字段才能连上 MCP", "hook-session-start 加了 project 过滤"],
+})
+
+// ❌ 错误：highlights 空或只有标题
+session_end({
+  summary: "本次 session",
+  highlights: [],  // ← 空数组 = 废记忆
 })
 ```
+
+**最低标准**：`highlights` 至少 3 条，每条不少于 5 个字。实在没做任何事 → 干脆不调 session_end（跳过比空写好）。
 
 ---
 
@@ -190,7 +203,42 @@ hook 注入的压缩摘要 **永远可用**——它直接读 vault 文件，不
 | set_memory_priority | 快速调优先级（少用） |
 | health_check | 诊断 vault 状态；MCP 报错时看 degraded |
 | memory_setup | 初始化 vault（首次） |
-| memory_import | 从 docs/ 导入文档 |
+| memory_import | 从 docs/ 导入文档。**默认蒸馏模式**（v0.4.9 起） |
+
+### 🔴 memory_import 蒸馏模式（强制，v0.4.9 新增）
+
+**默认 `mode: "distill"`**——不是复制原文到 vault，而是让你（agent）先总结文档要点再写入。对标 Supermemory 的 "Chunks + Memories" 分离：
+
+```typescript
+// ✅ 默认：蒸馏模式（推荐）
+memory_import({ mode: "distill", from_docs: true })
+// → MCP 只返回"哪些文档需要处理"，你逐个总结后用 remember 写入 distilled 版本
+
+// 什么时候用 raw？文档很长、你需要 recall-vault 里也保留原文副本
+memory_import({ mode: "raw", from_docs: true })
+// → 直接复制原文（旧行为），会产生大量冗余
+```
+
+**蒸馏模式的工作流**：
+
+```typescript
+// 1. 触发 import（只扫描，不写内容）
+const targets = memory_import({ mode: "distill", from_docs: true })
+// targets = [{ file: "docs/nforge/standards/xxx.md", priority: "high" }, ...]
+
+// 2. 你逐个 ReadFile → 总结要点（200 字内）→ remember 写入 distilled 版本
+for (const t of targets.files) {
+  const content = ReadFile(t.file);
+  const summary = summarize(content); // 你自己做
+  remember({
+    content: `# ${basename(t.file)}\n\n${summary}`,
+    scope: "project",
+    workspace_path: "<你的项目路径>",
+  });
+}
+```
+
+**为什么蒸馏？** 原文镜像会导致：38 份冗余记忆稀释高价值事实、hook 摘要被 import 污染、token 占用膨胀。蒸馏后 vault 里只有精炼的知识要点——和你手写的记忆同质量。
 
 ---
 

@@ -33,6 +33,8 @@ export interface ImportArgs {
   scope?: 'project' | 'shared';
   /** 默认 project_id = vault basename */
   project_id?: string;
+  /** 默认 distill. raw=直接复制原文，distill=只返回文件列表让 agent 自己总结 */
+  mode?: 'raw' | 'distill';
 }
 
 export interface ImportResult {
@@ -43,6 +45,8 @@ export interface ImportResult {
   failed: number;
   duration_ms: number;
   errors: string[];
+  /** distill 模式：返回文件列表让 agent 逐个处理 */
+  files?: { path: string; slug: string; relpath: string }[];
 }
 
 const DRIVERS = [
@@ -111,6 +115,7 @@ async function runDriver(
   scope: 'project' | 'shared',
   projectId: string,
   existingIds: Set<string>,
+  mode: 'raw' | 'distill',
 ): Promise<ImportResult> {
   const t0 = performance.now();
   const result: ImportResult = {
@@ -125,6 +130,17 @@ async function runDriver(
 
   const files = await walkImportFiles(driverRoot);
   result.scanned = files.length;
+
+  // distill 模式：不写内容，只返回文件列表
+  if (mode === 'distill') {
+    result.files = files.map((fp) => {
+      const rel = path.relative(driverRoot, fp);
+      return { path: fp, slug: slugify(path.basename(fp)), relpath: rel };
+    });
+    result.duration_ms = Math.round(performance.now() - t0);
+    logger.info(`memory_import [${driverLabel}] distill: scanned=${result.scanned} returning file list`);
+    return result;
+  }
 
   const typeDir = path.join(
     vault.root,
@@ -218,6 +234,7 @@ export async function memoryImport(args: ImportArgs = {}): Promise<ImportResult[
   const projectId = args.project_id ?? path.basename(vault.root);
   const runTrae = args.from_trae_documents ?? true;
   const runDocs = args.from_docs ?? true;
+  const mode = args.mode ?? 'distill';  // v0.4.9: default distill
 
   const existingIds = await collectExistingIds(vault);
   const cwd = process.cwd();
@@ -228,7 +245,7 @@ export async function memoryImport(args: ImportArgs = {}): Promise<ImportResult[
     if (d.driver === 'docs' && !runDocs) continue;
 
     const driverRoot = path.join(cwd, ...d.subPath);
-    const r = await runDriver(d.driver, d.label, driverRoot, vault, scope, projectId, existingIds);
+    const r = await runDriver(d.driver, d.label, driverRoot, vault, scope, projectId, existingIds, mode);
     results.push(r);
   }
 

@@ -320,6 +320,11 @@ export function createServer(): McpServer {
     },
     wrapHandler('remember', async (args) => {
       try {
+        // v0.4.9: content 最小长度校验
+        const bodyText = args.content.replace(/^---\s*\n[\s\S]*?\n---\s*\n/, '').trim();
+        if (bodyText.length < 20) {
+          return { isError: true, content: [{ type: 'text', text: `remember: content 正文过短（${bodyText.length} 字，最少 20 字）。空标题或一行字等于废记忆。` }] };
+        }
         const result = await remember({
           ...args,
           priority: args.priority as 1 | 2 | 3 | undefined,
@@ -524,17 +529,33 @@ export function createServer(): McpServer {
   server.registerTool(
     'memory_import',
     {
-      description: 'Phase 4: Import existing project docs (.trae/documents/ and docs/) as semantic memories. Idempotent — skips already-imported files.',
+      description: 'Phase 4: Import existing project docs (.trae/documents/ and docs/). v0.4.9+ default distill mode — returns file list only, agent summarizes each file via remember() instead of raw copy.',
       inputSchema: z.object({
         from_trae_documents: z.boolean().optional().describe('Scan .trae/documents/. Default true.'),
         from_docs: z.boolean().optional().describe('Scan docs/. Default true.'),
         scope: z.enum(['project', 'shared']).optional().describe('Default project.'),
         project_id: z.string().optional().describe('Default vault basename.'),
+        mode: z.enum(['raw', 'distill']).optional().describe('v0.4.9: distill=return file list only (agent distills via remember), raw=copy original. Default distill.'),
       }),
     },
     wrapHandler('memory_import', async (args) => {
       try {
         const results = await memoryImport(args);
+        const mode = args.mode ?? 'distill';
+        if (mode === 'distill') {
+          // distill 模式：合并所有 driver 的文件列表返回给 agent
+          const allFiles = results.flatMap((r) => r.files ?? []);
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                summary: `Distill mode: scanned ${results.reduce((a, r) => a + r.scanned, 0)} files across ${results.length} driver(s). Process each file with ReadFile → summarize → remember().`,
+                files: allFiles,
+              }, null, 2),
+            }],
+          };
+        }
+        // raw 模式（旧行为）
         const total = results.reduce(
           (acc, r) => ({ scanned: acc.scanned + r.scanned, created: acc.created + r.created, skipped: acc.skipped + r.skipped, failed: acc.failed + r.failed }),
           { scanned: 0, created: 0, skipped: 0, failed: 0 },
@@ -583,13 +604,22 @@ export function createServer(): McpServer {
         'Session 结束入口（exhale）—— 结束前调这个。自动生成 episodic 记忆，保存会话摘要和 highlights。',
       inputSchema: z.object({
         summary: z.string().optional().describe('本次 session 的总结：做了什么、有什么产出'),
-        highlights: z.array(z.string()).optional().describe('重要产出：决策、修复、新发现等'),
+        highlights: z.array(z.string()).min(1, 'v0.4.9: highlights 至少 1 条').optional().describe('重要产出：决策、修复、新发现等。v0.4.9: 至少 3 条，每条不少于 5 字'),
         session_id: z.string().optional().describe('覆盖 session_id（默认自动生成）'),
         project_id: z.string().optional().describe('覆盖 project_id（默认自动推断）'),
       }),
     },
     wrapHandler('session_end', async (args) => {
       try {
+        // v0.4.9: 校验 highlights 质量
+        const highlights = args.highlights ?? [];
+        if (highlights.length > 0 && highlights.length < 3) {
+          return { isError: true, content: [{ type: 'text', text: `session_end: highlights 至少 3 条（你只给了 ${highlights.length} 条）。空的话干脆不传 highlights 参数。` }] };
+        }
+        const shortHighlights = highlights.filter((h) => h.length < 5);
+        if (shortHighlights.length > 0) {
+          return { isError: true, content: [{ type: 'text', text: `session_end: highlights 每条不少于 5 字（发现 ${shortHighlights.length} 条过短：${shortHighlights.join('; ')}）。` }] };
+        }
         const result = await sessionEnd(args);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (err: any) {
