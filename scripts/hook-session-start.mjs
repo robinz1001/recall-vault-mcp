@@ -159,6 +159,76 @@ function ageLabel(isoStr) {
   return `${Math.round(ageD / 30)}月前`;
 }
 
+/** 判断快照内容是否是空模板 */
+function isTemplateBody(body) {
+  if (!body) return true;
+  if (body.includes('<!-- 一句话描述') && body.includes('<!-- 3-5 条')) return true;
+  // 模板占位符：表格标题 | 组件 | 职责 | 位置 |
+  if (body.includes('| 组件 |') && body.includes('| 职责 |')) return true;
+  // 模板红线：R1: XXX — 破坏后果
+  if (/R\d+: XXX/.test(body)) return true;
+  const comments = (body.match(/<!--[\s\S]*?-->/g) || []).length;
+  return comments >= 3;
+}
+
+/** 读快照目录（projects/{pid}/_snapshot/）生成项目画像摘要 */
+function buildSnapshotSummary(vaultRoot, pid) {
+  const snapshotDir = path.join(vaultRoot, 'projects', pid, '_snapshot');
+  if (!fs.existsSync(snapshotDir)) return null;
+
+  const files = ['project', 'stack', 'architecture', 'conventions'];
+  const parts = [];
+
+  for (const name of files) {
+    const fp = path.join(snapshotDir, `${name}.md`);
+    if (!fs.existsSync(fp)) continue;
+    const content = fs.readFileSync(fp, 'utf-8');
+    if (isTemplateBody(content)) continue;
+
+    if (name === 'stack') {
+      const techs = [];
+      for (const line of content.split('\n')) {
+        if (!line.startsWith('|')) continue;
+        const cells = line.split('|').map((c) => c.trim()).filter(Boolean);
+        if (cells.some((c) => c.includes('---') || c === '层' || c === '技术')) continue;
+        if (cells[1] && !cells[1].includes('<!--')) techs.push(cells[1]);
+        if (techs.length >= 4) break;
+      }
+      if (techs.length > 0) parts.push(`技术栈: ${techs.join(' · ')}`);
+    } else if (name === 'project') {
+      const goals = content.match(/-\s*\[[ x]\]\s*([^\n{]+)/g)?.slice(0, 2) || [];
+      const goalText = goals
+        .map((g) => g.replace(/-\s*\[[ x]\]\s*/, '').slice(0, 40))
+        .filter((t) => !t.includes('<!--') && !t.includes('目标 1'));
+      if (goalText.length > 0) parts.push(`目标: ${goalText.join('；')}`);
+    } else if (name === 'conventions') {
+      const redlines = content.match(/R\d+[：:][^\n]*/g)?.slice(0, 2) || [];
+      // 过滤模板占位符 "R1: XXX — 破坏后果"
+      const realRedlines = redlines.filter((r) => !r.includes('XXX'));
+      if (realRedlines.length > 0) parts.push(`红线: ${realRedlines.join('；').slice(0, 100)}`);
+    } else if (name === 'architecture') {
+      const firstMeaningful = content
+        .split('\n')
+        .find((l) => {
+          const t = l.trim();
+          if (!t || t.startsWith('#') || t.includes('<!--')) return false;
+          if (/^\|[\s\-|:]+\|$/.test(t)) return false;
+          if (t.includes('组件') && t.includes('职责')) return false;
+          return true;
+        });
+      if (firstMeaningful) parts.push(`架构: ${firstMeaningful.trim().slice(0, 60)}`);
+    }
+  }
+
+  if (parts.length === 0) return null;
+  const text = parts.join(' · ');
+  let ascii = 0, cjk = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) < 128) ascii++; else cjk++;
+  }
+  return { text, est_tokens: Math.ceil(ascii / 4 + cjk / 3) };
+}
+
 /** 生成压缩摘要（只取当前项目 + shared 的记忆） */
 function buildCompressedSummary(vaultRoot, pid) {
   const allMd = collectMdFiles(vaultRoot);
@@ -254,18 +324,25 @@ try {
   const vaultRoot = resolveVaultRoot();
   const projectId = inferProjectId(cwd, vaultRoot);
 
+  // 1. 先拿快照（固定结构，优先级最高）
+  const snapshot = buildSnapshotSummary(vaultRoot, projectId);
+
+  // 2. 再拿 semantic/episodic 记忆
   const bundle = buildCompressedSummary(vaultRoot, projectId);
 
   let context;
-  if (bundle && bundle.memory_count > 0) {
-    context = `[RecallVault SessionStart Hook] 新 session 开始，已为你准备压缩上下文摘要（~${bundle.est_tokens} tokens）：
-${bundle.text}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const sections = [];
 
-使用建议：
-1. 以上是最近的高价值记忆。直接作为上下文参考，避免重复踩坑。
-2. 需要更精确的搜索或更多结果时，调用 recall({ query: "关键词", include_shared: true, limit: 5 })。
-3. 完成工作后主动调 remember 沉淀决策和发现。`;
+  if (snapshot) {
+    sections.push(`📋 项目画像（${snapshot.est_tokens} tokens）：\n   ${snapshot.text}`);
+  }
+
+  if (bundle && bundle.memory_count > 0) {
+    sections.push(bundle.text);
+  }
+
+  if (sections.length > 0) {
+    context = `[RecallVault SessionStart Hook] 新 session 开始，已准备上下文：\n${sections.join('\n')}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n使用建议：\n1. 项目画像（如果有）是确定性快照，直接作为工作基准。\n2. 高价值记忆是最近的关键决策。\n3. 需要更精确的搜索时调 recall({ query: "关键词", include_shared: true, limit: 5 })。\n4. 完成工作后主动调 remember 沉淀决策和发现。`;
   } else {
     // vault 是空的，给引导
     context = `[RecallVault SessionStart Hook] 新 session 开始。
@@ -274,9 +351,17 @@ Vault 是空的 — 这是全新 start。记得在工作过程中主动 remember
 - 架构决策 → remember({ memory_type: 'semantic', scope: 'project', priority: 2, tags: ['architecture'] })
 - 踩坑经验 → remember({ memory_type: 'semantic', scope: 'project', priority: 3, tags: ['regression'] })
 - 跨项目知识 → remember({ memory_type: 'semantic', scope: 'shared' })
-- Session 结束 → remember({ memory_type: 'episodic', session_id: 'sess_' + new Date().toISOString().slice(0, 10).replace(/-/g, '') })
+- Session 结束 → session_end({ summary: "本次做了什么", highlights: ["至少三条"] })
 
-工作遇到相关问题时，调用 recall({ query: "关键词", include_shared: true, limit: 5 }) 取回上下文。`;
+工作遇到相关问题时，调用 recall({ query: "关键词", include_shared: true, limit: 5 }) 取回上下文。
+
+另外建议建立结构化快照（projects/${projectId}/_snapshot/）：
+- project.md     项目画像、目标、非目标
+- stack.md       技术栈（表格）
+- architecture.md 分层、组件、依赖方向
+- conventions.md  命名约定、红线 R1-R10
+
+快照会在每次 session 开始时自动注入，不需要 recall 就能用。`;
   }
 
   process.stdout.write(
