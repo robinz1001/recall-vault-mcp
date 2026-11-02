@@ -89,6 +89,55 @@ function estimateTokens(text) {
   return Math.ceil(ascii / 4 + cjk / 3);
 }
 
+/** 从 workspace 路径推断 project_id（与 src/storage/vault.ts 一致）
+ *  关键：优先用目录名（basename），因为 package.json name 可能含中文
+ */
+function inferProjectId(workspacePath, vaultRoot) {
+  const basenameId = path.basename(workspacePath).toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+
+  // 1. 目录名已经在 vault 里 → 直接用
+  const basenameDir = path.join(vaultRoot, 'projects', basenameId);
+  if (fs.existsSync(basenameDir)) return basenameId;
+
+  // 2. 找 git root 的 basename
+  let dir = workspacePath;
+  for (let i = 0; i < 5; i++) {
+    if (fs.existsSync(path.join(dir, '.git'))) {
+      const gitId = path.basename(dir).toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+      if (fs.existsSync(path.join(vaultRoot, 'projects', gitId))) return gitId;
+      break;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  // 3. 尝试 package.json name（但如果包含非 ASCII 字符就跳过）
+  const pkgPath = path.join(workspacePath, 'package.json');
+  if (fs.existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+      if (pkg.name && /^[a-zA-Z0-9_\-@/]+$/.test(pkg.name)) {
+        const pkgId = pkg.name.replace(/^@[^/]+\//, '').toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+        if (fs.existsSync(path.join(vaultRoot, 'projects', pkgId))) return pkgId;
+      }
+    } catch { /* ignore */ }
+  }
+
+  // 4. fallback: basename（即使 vault 里还没有，也让后续写入正确）
+  return basenameId;
+}
+
+/** 判断 md 文件是否属于当前项目（或 shared） */
+function isRelevantProject(filePath, vaultRoot, pid) {
+  const rel = path.relative(vaultRoot, filePath);
+  // shared/semantic/... → 全局可用
+  if (rel.startsWith('shared' + path.sep)) return true;
+  // projects/{pid}/... → 当前项目
+  if (rel.startsWith(path.join('projects', pid) + path.sep)) return true;
+  return false;
+}
+
 /** 从 body 提取标题（第一行非空文本或 # 开头的标题） */
 function extractTitle(body) {
   const firstLine = body.split('\n').find((l) => l.trim().length > 0) ?? '';
@@ -110,13 +159,15 @@ function ageLabel(isoStr) {
   return `${Math.round(ageD / 30)}月前`;
 }
 
-/** 生成压缩摘要 */
-function buildCompressedSummary(vaultRoot) {
+/** 生成压缩摘要（只取当前项目 + shared 的记忆） */
+function buildCompressedSummary(vaultRoot, pid) {
   const allMd = collectMdFiles(vaultRoot);
   if (allMd.length === 0) return null;
 
   const entries = [];
   for (const fp of allMd) {
+    // 🔴 关键修复：只取当前项目 + shared 的
+    if (!isRelevantProject(fp, vaultRoot, pid)) continue;
     try {
       const raw = fs.readFileSync(fp, 'utf-8');
       const { meta, body } = parseFrontmatter(raw);
@@ -158,9 +209,10 @@ function buildCompressedSummary(vaultRoot) {
   // 取最近 3 条（priority >= 2 的优先）
   const top = entries.slice(0, 3);
 
-  // 找最新 episodic
+  // 找最新 episodic（也要只看当前项目 + shared）
   let episodicNote = null;
   for (const fp of allMd) {
+    if (!isRelevantProject(fp, vaultRoot, pid)) continue;
     try {
       const raw = fs.readFileSync(fp, 'utf-8');
       const { meta, body } = parseFrontmatter(raw);
@@ -200,8 +252,9 @@ function buildCompressedSummary(vaultRoot) {
 // === 主流程 ===
 try {
   const vaultRoot = resolveVaultRoot();
+  const projectId = inferProjectId(cwd, vaultRoot);
 
-  const bundle = buildCompressedSummary(vaultRoot);
+  const bundle = buildCompressedSummary(vaultRoot, projectId);
 
   let context;
   if (bundle && bundle.memory_count > 0) {

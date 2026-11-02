@@ -87,7 +87,7 @@ if (args.includes('--version') || args.includes('-v')) {
 if (sub === 'install-skills') {
   // 独立子命令 → spawn 脚本（跨 IDE 更可靠）
   const scriptPath = join(__dirname, '..', 'scripts', 'install-skills.mjs');
-  const child = spawn('node', [scriptPath], { stdio: 'inherit' });
+  const child = spawn('node', [scriptPath, ...args.slice(1)], { stdio: 'inherit' });
   child.on('exit', (code) => process.exit(code ?? 0));
 } else if (sub && mcpCliSubcommands.includes(sub)) {
   // CLI 子命令 → 转发到 scripts/cli.mjs

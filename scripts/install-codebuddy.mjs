@@ -70,18 +70,29 @@ console.log('  ✅ ' + skillDest);
 // Step 3: MCP 配置（用户级 ~/.codebuddy/.mcp.json）
 // ═══════════════════════════════════════════════════════════════════════════
 
-console.log('\n[3/4] 写入 ~/.codebuddy/.mcp.json（用户级 MCP 配置）...');
+console.log('\n[3/4] 写入 MCP 配置（~/.codebuddy/.mcp.json + mcp.json 双保险）...');
 
-const mcpFile = join(homedir, '.codebuddy', '.mcp.json');
-const existing = readJson(mcpFile) || { mcpServers: {} };
 const newServer = { command: 'npx', args: ['-y', 'recall-vault-mcp'] };
-
-existing.mcpServers = existing.mcpServers || {};
-existing.mcpServers['recall-vault'] = newServer;
-
-ensureDir(dirname(mcpFile));
-writeFileSync(mcpFile, JSON.stringify(existing, null, 2) + '\n', 'utf-8');
-console.log('  ✅ recall-vault → npx -y recall-vault-mcp');
+const mcpTargets = [
+  join(homedir, '.codebuddy', '.mcp.json'),  // 标准用户级（有点前缀）
+  join(homedir, '.codebuddy', 'mcp.json'),   // CodeBuddy 也可能读这个（无点前缀）
+];
+for (const mcpFile of mcpTargets) {
+  const existing = readJson(mcpFile) || { mcpServers: {} };
+  existing.mcpServers = existing.mcpServers || {};
+  if (!existing.mcpServers['recall-vault']) {
+    existing.mcpServers['recall-vault'] = newServer;
+    ensureDir(dirname(mcpFile));
+    try {
+      writeFileSync(mcpFile, JSON.stringify(existing, null, 2) + '\n', 'utf-8');
+      console.log('  ✅ ' + mcpFile);
+    } catch (e) {
+      console.log('  ⚠️  ' + mcpFile + ' (被占用或无权限，跳过)');
+    }
+  } else {
+    console.log('  ⏭️  ' + mcpFile + ' (已有 recall-vault，跳过)');
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Step 4: Hooks 配置（用户级 ~/.codebuddy/settings.json）
