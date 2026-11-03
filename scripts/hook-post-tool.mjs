@@ -75,11 +75,27 @@ function extractPattern(args) {
  *
  * 返回 null 表示继续正常流程；返回 { activity, hint } 表示需要写 marker + additionalContext
  */
-function detectEvent(toolName, argsObj, responseStr) {
-  const name = (toolName || '').toLowerCase();
+/** 归一化工具名 → 统一类别 */
+function classifyTool(name) {
+  const n = (name || '').toLowerCase();
+  // 命令执行类（Trae: RunCommand, CodeBuddy: Bash/Shell, Windsurf: runCommand）
+  if (n.includes('runcommand') || n.includes('run_command') || n === 'bash' || n === 'shell') return 'command';
+  // 搜索类（Glob/SearchGlob/Grep — 搜 vault md 时建议 recall 替代）
+  if (n.includes('glob') || n.includes('searchglob') || n === 'grep' || n === 'search') return 'search';
+  // 读文件类
+  if (n.includes('readfile') || n.includes('file_read') || n.includes('read_file') || n === 'read' || n === 'fileread') return 'read';
+  // 写文件类（绕过 remember 警告）
+  if (n.includes('writefile') || n.includes('file_write') || n.includes('write_file') || n.includes('createfile') || n === 'write' || n === 'create') return 'write';
+  // 编辑文件类（绕过 update_memory 警告）
+  if (n === 'edit' || n.includes('editfile') || (n.includes('edit') && !n.includes('editmemory') && !n.includes('setmemory') && !n.includes('update'))) return 'edit';
+  return null;
+}
 
-  // ============ 1. RunCommand — 检测值得 remember 的产出 ============
-  if (name.includes('runcommand') || name.includes('run_command')) {
+function detectEvent(toolName, argsObj, responseStr) {
+  const category = classifyTool(toolName);
+
+  // ============ 1. command — 检测值得 remember 的产出 ============
+  if (category === 'command') {
     const lower = responseStr.toLowerCase();
     const truncated = responseStr.slice(0, 500);
 
@@ -170,8 +186,8 @@ function detectEvent(toolName, argsObj, responseStr) {
     return null;
   }
 
-  // ============ 2. Glob / SearchGlob — 手动搜 vault ============
-  if (name.includes('glob') || name.includes('search')) {
+  // ============ 2. search (Glob/Grep) — 手动搜 vault ============
+  if (category === 'search') {
     const pattern = extractPattern(argsObj);
     // 搜 vault projects/ 或 shared/ 下的 md
     if (pattern && (pattern.includes('vault') || pattern.includes('projects') || pattern.includes('shared') || pattern.includes('**/*.md'))) {
@@ -183,8 +199,8 @@ function detectEvent(toolName, argsObj, responseStr) {
     return null;
   }
 
-  // ============ 3. ReadFile / FileRead — 批量读 vault md ============
-  if (name.includes('readfile') || name.includes('file_read') || name.includes('read_file')) {
+  // ============ 3. read — 读 vault md ============
+  if (category === 'read') {
     const fp = extractFilePath(argsObj);
     if (fp && isVaultMd(fp)) {
       return {
@@ -195,8 +211,8 @@ function detectEvent(toolName, argsObj, responseStr) {
     return null;
   }
 
-  // ============ 4. WriteFile — 写 vault md（绕过 remember）===========
-  if (name.includes('writefile') || name.includes('file_write') || name.includes('write_file') || name.includes('createfile')) {
+  // ============ 4. write — 写 vault md（绕过 remember）===========
+  if (category === 'write') {
     const fp = extractFilePath(argsObj);
     if (fp && isVaultMd(fp)) {
       return {
@@ -207,9 +223,8 @@ function detectEvent(toolName, argsObj, responseStr) {
     return null;
   }
 
-  // ============ 5. Edit / EditFile — edit vault md（绕过 update_memory）===========
-  if (name.includes('edit') && !name.includes('editmemory') && !name.includes('setmemory') && !name.includes('update')) {
-    // 注意：update_memory 也带 edit，要排除
+  // ============ 5. edit — edit vault md（绕过 update_memory）===========
+  if (category === 'edit') {
     const fp = extractFilePath(argsObj);
     if (fp && isVaultMd(fp)) {
       return {
