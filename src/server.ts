@@ -25,8 +25,10 @@ import { sessionStart } from './tools/session_start.js';
 import { sessionEnd } from './tools/session_end.js';
 import { organizeMemories } from './tools/organize_memories.js';
 import { snapshotSummary, readSnapshot, writeSnapshot, SNAPSHOT_FILES } from './tools/snapshot.js';
+import path from 'node:path';
+import fs from 'node:fs';
 
-const TOTAL_TOOLS = 15;
+const TOTAL_TOOLS = 16;
 
 const SERVER_INSTRUCTIONS = `# RecallVault — Agent Behavior Script
 
@@ -718,6 +720,106 @@ export function createServer(): McpServer {
         };
       } catch (err: any) {
         return { isError: true, content: [{ type: 'text', text: `snapshot_update failed: ${err.message}` }] };
+      }
+    }),
+  );
+
+  // === resolve_context_path ===
+  server.registerTool(
+    'resolve_context_path',
+    {
+      description: 'Resolve the absolute/relative path to a project\'s local .recall-vault/context.md, and discover neighbor projects with their own context.md. Use this to cross-reference project memory across your workspace.',
+      inputSchema: z.object({
+        project_id: z.string().optional().describe('Target project. If omitted, returns all projects that have context.md on disk.'),
+        workspace_path: z.string().optional().describe('Current workspace path (for computing relative paths). Falls back to cwd.'),
+      }),
+    },
+    wrapHandler('resolve_context_path', async (args) => {
+      try {
+        const vault = new VaultManager();
+        const vaultRoot = vault.root;
+        const cwd = args.workspace_path || process.cwd();
+
+        const projectsDir = path.join(vaultRoot, 'projects');
+        const results: any[] = [];
+
+        if (!fs.existsSync(projectsDir)) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ projects: [], note: 'No projects dir in vault yet.' }, null, 2) }],
+          };
+        }
+
+        for (const pid of fs.readdirSync(projectsDir)) {
+          if (args.project_id && pid !== args.project_id) continue;
+
+          let projectWorkspace: string | null = null;
+          let cur = path.resolve(cwd);
+          for (let i = 0; i < 4 && !projectWorkspace; i++) {
+            try {
+              const siblings = fs.readdirSync(cur, { withFileTypes: true });
+              for (const sib of siblings) {
+                if (sib.isDirectory() && sib.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_') === pid) {
+                  const localCtx = path.join(cur, sib.name, '.recall-vault', 'context.md');
+                  if (fs.existsSync(localCtx)) {
+                    projectWorkspace = path.join(cur, sib.name);
+                    break;
+                  }
+                }
+              }
+            } catch { /* ignore */ }
+            const parent = path.dirname(cur);
+            if (parent === cur) break;
+            cur = parent;
+          }
+
+          if (!projectWorkspace) continue;
+
+          const localCtx = path.join(projectWorkspace, '.recall-vault', 'context.md');
+          const localCrossRefs = path.join(projectWorkspace, '.recall-vault', 'cross-refs.json');
+
+          const entry: any = {
+            project_id: pid,
+            workspace_path: projectWorkspace,
+            context_md: {
+              abs_path: localCtx,
+              exists: fs.existsSync(localCtx),
+              size: fs.existsSync(localCtx) ? fs.statSync(localCtx).size : 0,
+              rel_from_cwd: path.relative(cwd, localCtx).replace(/\\/g, '/'),
+            },
+          };
+
+          if (fs.existsSync(localCrossRefs)) {
+            try {
+              const refs = JSON.parse(fs.readFileSync(localCrossRefs, 'utf-8'));
+              entry.neighbors = refs.neighbors || [];
+            } catch { /* ignore */ }
+          }
+
+          results.push(entry);
+        }
+
+        const output = {
+          cwd,
+          project_count: results.length,
+          projects: results,
+        };
+
+        if (args.project_id && results.length === 0) {
+          const vaultProjDir = path.join(projectsDir, args.project_id);
+          if (fs.existsSync(vaultProjDir)) {
+            output.projects = [{
+              project_id: args.project_id,
+              vault_only: true,
+              note: 'Project exists in vault but has no local .recall-vault/context.md. Run a session in this project to auto-generate.',
+            }];
+          }
+        }
+
+        return {
+          content: [{ type: 'text', text: JSON.stringify(output, null, 2) }],
+        };
+      } catch (err: any) {
+        return { isError: true, content: [{ type: 'text', text: `resolve_context_path failed: ${err.message}` }] };
       }
     }),
   );

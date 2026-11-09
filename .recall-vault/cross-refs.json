@@ -1,0 +1,42 @@
+{
+  "self": {
+    "project_id": "recall-vault",
+    "context_path": ".recall-vault/context.md",
+    "vault_project_dir": "C:/Users/robin/.recall-vault/projects/recall-vault",
+    "last_sync": "2026-11-09T07:16:16.989Z"
+  },
+  "neighbors": [
+    {
+      "project_id": "mfel-studio",
+      "name": "mfel-studio",
+      "rel_path": "../../mfel/mfel-studio/.recall-vault/context.md",
+      "abs_path": "d:/Users/robin/source/mfel/mfel-studio/.recall-vault/context.md",
+      "distance": 3,
+      "has_context": true
+    },
+    {
+      "project_id": "newtonrank_com",
+      "name": "newtonrank.com",
+      "rel_path": "../../mfel/newtonrank.com/.recall-vault/context.md",
+      "abs_path": "d:/Users/robin/source/mfel/newtonrank.com/.recall-vault/context.md",
+      "distance": 3,
+      "has_context": true
+    },
+    {
+      "project_id": "vscode-plugin",
+      "name": "vscode-plugin",
+      "rel_path": "../../mfel/vscode-plugin/.recall-vault/context.md",
+      "abs_path": "d:/Users/robin/source/mfel/vscode-plugin/.recall-vault/context.md",
+      "distance": 3,
+      "has_context": true
+    },
+    {
+      "project_id": "temp_20261109_02",
+      "name": "temp_20261109_02",
+      "rel_path": "../../../Documents/Trae-CN/temp_20261109_02/.recall-vault/context.md",
+      "abs_path": "d:/Users/robin/Documents/Trae-CN/temp_20261109_02/.recall-vault/context.md",
+      "distance": 5,
+      "has_context": true
+    }
+  ]
+}

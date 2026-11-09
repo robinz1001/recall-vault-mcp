@@ -1,0 +1,5 @@
+# RecallVault 自动生成的同步目录
+# 建议提交 context.md（项目画像和跨项目引用）
+# 但不要提交 debug 日志或临时缓存
+_logs/
+cache/

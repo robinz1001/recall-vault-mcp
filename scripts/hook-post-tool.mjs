@@ -13,11 +13,36 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { syncContextMd } from './context-writer.mjs';
 
 const cwd = process.env.TRAE_PROJECT_DIR || process.env.CODEBUDDY_PROJECT_DIR || process.env.CLAUDE_PROJECT_DIR || process.env.CODEX_PROJECT_DIR || process.env.WINDSURF_PROJECT_DIR || process.env.OPENCODE_PROJECT_DIR || process.cwd();
 const stateDir = path.join(cwd, 'agent-state');
 const markerFile = path.join(stateDir, 'activity.json');
 const vaultMdPattern = /[\\/](projects|shared)[\\/].*\.md$/; // vault 内的 md 文件路径特征
+
+// context.md 刷新 throttle：5 分钟内不重复刷新
+const CONTEXT_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
+const lastRefreshFile = path.join(stateDir, '.last_context_refresh');
+
+function refreshContextMd(force = false) {
+  try {
+    const now = Date.now();
+    const cooldownFile = lastRefreshFile;
+    let lastRefresh = 0;
+    if (fs.existsSync(cooldownFile)) {
+      lastRefresh = parseInt(fs.readFileSync(cooldownFile, 'utf-8').trim(), 10) || 0;
+    }
+
+    if (!force && now - lastRefresh < CONTEXT_REFRESH_COOLDOWN_MS) {
+      return null; // throttle 中
+    }
+
+    const result = syncContextMd(cwd);
+    fs.mkdirSync(path.dirname(cooldownFile), { recursive: true });
+    fs.writeFileSync(cooldownFile, String(now), 'utf-8');
+    return result;
+  } catch { return null; }
+}
 
 function ensureStateDir() {
   if (!fs.existsSync(stateDir)) {
@@ -238,11 +263,25 @@ function detectEvent(toolName, argsObj, responseStr) {
   return null;
 }
 
+// ============ Debug Log ============
+const DEBUG_LOG = path.join(
+  process.env.USERPROFILE || process.env.HOME || '/tmp',
+  '.recall-vault', '_logs', 'hook-debug.log',
+);
+function debug(msg, data) {
+  try {
+    fs.mkdirSync(path.dirname(DEBUG_LOG), { recursive: true });
+    const line = `[${new Date().toISOString()}] ${msg} ${data ? JSON.stringify(data).slice(0, 300) : ''}\n`;
+    fs.appendFileSync(DEBUG_LOG, line);
+  } catch {}
+}
+
 // ============ 主流程 ============
 process.stdin.setEncoding('utf-8');
 let input = '';
 process.stdin.on('data', (chunk) => (input += chunk));
 process.stdin.on('end', () => {
+  debug('HOOK_CALLED', { cwd, env_dir: process.env.CODEBUDDY_PROJECT_DIR || process.env.TRAE_PROJECT_DIR || null });
   try {
     const data = JSON.parse(input);
     const toolName = data.tool_name || data.toolName || '';
@@ -250,7 +289,9 @@ process.stdin.on('end', () => {
     const response = data.tool_response || data.response || '';
     const responseStr = typeof response === 'string' ? response : JSON.stringify(response);
 
+    debug('INPUT', { toolName, keys: Object.keys(data) });
     const result = detectEvent(toolName, args, responseStr);
+    debug('DETECT_RESULT', { matched: !!result, activity: result?.activity?.type || null, hint: result?.hint || null });
     if (!result) {
       process.stdout.write(JSON.stringify({ continue: true }));
       return;
@@ -279,6 +320,12 @@ process.stdin.on('end', () => {
         marker.activities = marker.activities.slice(-20);
       }
       saveMarker(marker);
+
+      // 🔴 自动刷新 context.md（5 分钟 throttle）
+      const refreshResult = refreshContextMd();
+      if (refreshResult) {
+        debug('CONTEXT_REFRESHED', refreshResult);
+      }
     }
 
     // 输出 additionalContext（hint=null 表示静默写 marker，不打扰 agent）

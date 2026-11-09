@@ -1,6 +1,6 @@
 ---
 name: recall-vault
-version: 0.4.11
+version: 0.4.16
 description: |
   跨会话、跨项目本地记忆管理系统。SessionStart hook 自动注入上下文摘要，remember 自动推断，recall 优先于 grep。
   当你需要记住技术决策、搜索历史记忆、或在新 session 里恢复项目上下文时使用。
@@ -327,4 +327,116 @@ Hook 是最后防线。如果你（agent）主动 remember/recall 了，hook 不
 3. recall 空结果 → 明确说没有，别瞎编
 4. MCP 报错 → health_check → 降级 → 继续工作
 5. 不确定该不该 remember？→ 花 >1min 才搞定的 → 存
+```
+
+---
+
+## 🤝 跨项目本地 context.md（v0.4.16 新增）
+
+### 为什么需要这个？
+
+MCP server 是单例，跨项目读取靠 `recall({ project_id: "xxx" })` 传参——但 agent 不知道要传。**本地 `.recall-vault/context.md` 是磁盘文件，任何 IDE 的 agent 都能直接 `ReadFile`，不需要 MCP。**
+
+### 项目本地 `.recall-vault/` 目录
+
+每个项目目录下自动生成：
+
+```
+{project}/.recall-vault/
+├── context.md              ← 📌 主文件：session 开始前先读这个
+├── cross-refs.json         ← 邻居项目清单（含 rel_path）
+└── .gitignore              ← 建议：提交 context.md，忽略 cache
+```
+
+### 1. 开始新 session → 先 `ReadFile(".recall-vault/context.md")`
+
+这是 **磁盘上的真实文件**，SessionStart hook 自动生成，Stop hook 自动刷新：
+
+```typescript
+// 你（agent）的 Step 0 改成：
+const ctx = ReadFile(".recall-vault/context.md");
+// ctx 包含：
+//   - 📋 项目画像（从 vault _snapshot/ 提炼）
+//   - 🔥 Top 5 关键记忆（priority=3 的先）
+//   - 🔗 邻居项目列表（可跨项目读取）
+//   - 📖 完整记忆索引（最多 20 条）
+//   - 上 session 摘要
+```
+
+### 2. 跨项目读取（零依赖）
+
+context.md 的 🔗 关联项目章节已经给了邻居的相对路径：
+
+```markdown
+## 🔗 关联项目
+- **recall-vault** → `../../wmetasoft/recall-vault/.recall-vault/context.md`
+- **vscode-plugin** → `../vscode-plugin/.recall-vault/context.md`
+```
+
+**直接 ReadFile 跨项目读取：**
+
+```typescript
+// 你在 mfel-studio，想查 recall-vault 的 MCP 工具实现
+const recallVaultCtx = ReadFile("../../wmetasoft/recall-vault/.recall-vault/context.md");
+// 或者从 cross-refs.json 拿路径（更可靠）
+const refs = JSON.parse(ReadFile(".recall-vault/cross-refs.json"));
+const neighborPath = refs.neighbors.find(n => n.project_id === "recall-vault")?.rel_path;
+if (neighborPath) {
+  const neighborCtx = ReadFile(neighborPath);
+}
+```
+
+**MCP 方式（稳定 API，可选）：**
+
+```typescript
+// 不指定 project_id → 返回所有有 context.md 的项目
+resolve_context_path({ workspace_path: "<你的项目路径>" })
+// 或指定
+resolve_context_path({ project_id: "recall-vault", workspace_path: "..." })
+```
+
+### 3. 什么时候跨项目读取？
+
+| 场景 | 怎么做 |
+|------|--------|
+| 要查另一个项目的技术栈/架构 | `ReadFile("../neighbor/.recall-vault/context.md")` |
+| 另一个项目可能有相关决策 | `recall({ query: "...", project_id: "neighbor" })` |
+| 不确定邻居项目名 | 先看当前 context.md 的 🔗 关联项目章节 |
+
+### content.md 自动刷新时机
+
+| 触发点 | 机制 |
+|--------|------|
+| SessionStart hook | ✅ 每次 session 开始自动生成 |
+| PostToolUse hook | ✅ 有产出事件（test_pass/build_pass/git_commit）后 throttle 5 分钟刷新 |
+| Stop hook | ✅ session 结束强制刷新（跳过 throttle） |
+
+### 三层污染防御（避免你的记忆被别的项目内容污染）
+
+| 层级 | 检查什么 | 为什么 |
+|------|----------|--------|
+| 1 | frontmatter 精确匹配当前 project_id | 基础隔离 |
+| 2 | frontmatter 标记了其他项目 → 排除 | 物理隔离不充分时的第二防线 |
+| 3 | **内容交叉检查**（长项目名 + 单词边界） | 防止 agent 错误推断 project_id 时污染（短名字如 "robin" 跳过防误伤） |
+
+### cross-refs.json 格式
+
+```json
+{
+  "self": {
+    "project_id": "mfel-studio",
+    "context_path": ".recall-vault/context.md",
+    "vault_project_dir": "C:/Users/robin/.recall-vault/projects/mfel-studio",
+    "last_sync": "2026-11-09T10:42:00.000Z"
+  },
+  "neighbors": [
+    {
+      "project_id": "recall-vault",
+      "name": "recall-vault",
+      "rel_path": "../../wmetasoft/recall-vault/.recall-vault/context.md",
+      "abs_path": "d:/Users/robin/source/wmetasoft/recall-vault/.recall-vault/context.md",
+      "distance": 3
+    }
+  ]
+}
 ```

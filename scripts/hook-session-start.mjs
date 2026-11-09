@@ -128,13 +128,95 @@ function inferProjectId(workspacePath, vaultRoot) {
   return basenameId;
 }
 
-/** 判断 md 文件是否属于当前项目（或 shared） */
-function isRelevantProject(filePath, vaultRoot, pid) {
+/** 扫描记忆 body 是否包含 vault 里其他项目的名称
+ *
+ * 场景：agent 在 recall-vault 工作，但 remember 了 tournament-master 的内容，
+ *       frontmatter project_id 被推断成 recall-vault → 污染上下文。
+ *
+ * 防御：如果 vault 里存在其他项目目录 X，且记忆内容提到 "X"，
+ *       但 frontmatter project_id !== X（也不是 shared）→ 排除。
+ */
+let _vaultProjectIdsCache = null;
+function getVaultProjectIds(vaultRoot) {
+  if (_vaultProjectIdsCache) return _vaultProjectIdsCache;
+  const dir = path.join(vaultRoot, 'projects');
+  if (!fs.existsSync(dir)) { _vaultProjectIdsCache = []; return []; }
+  _vaultProjectIdsCache = fs.readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name.toLowerCase());
+  return _vaultProjectIdsCache;
+}
+
+function contentCrossCheck(body, pid, vaultRoot, meta) {
+  const projectIds = getVaultProjectIds(vaultRoot);
+  if (projectIds.length <= 1) return true;
+
+  const contentLower = body.toLowerCase();
+  for (const otherPid of projectIds) {
+    if (otherPid === pid) continue;
+    if (meta?.project_id === otherPid) continue;
+
+    // 短项目名（≤5字符）跳过 — 容易误伤（如 "robin" 同时是用户名）
+    if (otherPid.length <= 5) continue;
+
+    // 用单词边界匹配 — 避免把路径片段（.recall-vault/）里的 pid 算进去
+    // tournament-master → 匹配独立出现（不是作为其他 pid 的子串）
+    const escaped = otherPid.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const regex = new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, 'i');
+    if (regex.test(contentLower)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** 判断 md 文件是否属于当前项目（或 shared）
+ *
+ * 四层检查，**严格按优先级**：
+ *
+ *   1. frontmatter 精确匹配当前 pid → ✅ 直接通过（不管内容！）
+ *      场景：mfel-studio 的记忆提到了 recall-vault（它用了 recall-vault MCP）
+ *      → 这是正常的，不该排除
+ *
+ *   2. frontmatter 标记了其他项目 → ❌ 排除
+ *
+ *   3. frontmatter 标记 shared 或未标记 + 物理路径在 shared/
+ *      → 才用 contentCrossCheck 查内容（只在模糊场景下启用）
+ *
+ *   4. 物理路径 fallback（老记忆没 project_id）
+ */
+function isRelevantProject(filePath, vaultRoot, pid, meta, body) {
   const rel = path.relative(vaultRoot, filePath);
-  // shared/semantic/... → 全局可用
-  if (rel.startsWith('shared' + path.sep)) return true;
-  // projects/{pid}/... → 当前项目
-  if (rel.startsWith(path.join('projects', pid) + path.sep)) return true;
+
+  // 1. frontmatter 精确匹配当前 pid → 但还是做 contentCrossCheck
+  //    因为 frontmatter 可能被 agent 错误推断（如在 recall-vault 工作时 remember 了 tournament-master，project_id 被推断成 recall-vault）
+  if (meta?.project_id && String(meta.project_id).toLowerCase() === pid) {
+    if (body && !contentCrossCheck(body, pid, vaultRoot, meta)) {
+      return false;
+    }
+    return true;
+  }
+
+  // 2. frontmatter 标记了其他项目 → 排除
+  if (meta?.project_id && String(meta.project_id).toLowerCase() !== 'shared') {
+    return false;
+  }
+
+  // 3. frontmatter 标记 shared 或未标记 + 物理路径在 shared/
+  if (rel.startsWith('shared' + path.sep)) {
+    if (body && !contentCrossCheck(body, pid, vaultRoot, meta)) {
+      return false;
+    }
+    return true;
+  }
+
+  // 4. 物理路径 fallback
+  if (rel.startsWith(path.join('projects', pid) + path.sep)) {
+    if (body && !contentCrossCheck(body, pid, vaultRoot, meta)) {
+      return false;
+    }
+    return true;
+  }
   return false;
 }
 
@@ -236,13 +318,13 @@ function buildCompressedSummary(vaultRoot, pid) {
 
   const entries = [];
   for (const fp of allMd) {
-    // 🔴 关键修复：只取当前项目 + shared 的
-    if (!isRelevantProject(fp, vaultRoot, pid)) continue;
     try {
       const raw = fs.readFileSync(fp, 'utf-8');
       const { meta, body } = parseFrontmatter(raw);
 
-      // 过滤
+      // 🔴 两层检查：物理路径 + frontmatter project_id
+      if (!isRelevantProject(fp, vaultRoot, pid, meta, body)) continue;
+
       if (meta.archived) continue;
       if (meta.valid_to) continue; // superseded
       if (!meta.id) continue;
@@ -282,10 +364,10 @@ function buildCompressedSummary(vaultRoot, pid) {
   // 找最新 episodic（也要只看当前项目 + shared）
   let episodicNote = null;
   for (const fp of allMd) {
-    if (!isRelevantProject(fp, vaultRoot, pid)) continue;
     try {
       const raw = fs.readFileSync(fp, 'utf-8');
       const { meta, body } = parseFrontmatter(raw);
+      if (!isRelevantProject(fp, vaultRoot, pid, meta, body)) continue;
       if (meta.memory_type !== 'episodic') continue;
       if (meta.valid_to) continue;
       episodicNote = {
@@ -319,17 +401,298 @@ function buildCompressedSummary(vaultRoot, pid) {
   };
 }
 
+/** 🔗 邻居项目发现 — 向上扫 parent dirs + 向下广度优先
+ *
+ * 算法：
+ *   1. 从 workspace 开始向上扫 3 层 parent
+ *   2. 在每层 parent 下，广度优先找 .recall-vault/context.md（最多 2 层子目录）
+ *   3. 排除自身，去重，按 distance 排序
+ *
+ * 这个设计让你把所有项目放在同一个祖先目录下（如 d:\Users\robin\source\），
+ * 任何一个项目启动时都能自动发现其他有 .recall-vault/ 的邻居。
+ */
+function discoverNeighbors(workspacePath, vaultRoot) {
+  const neighbors = [];
+  const visited = new Set();
+  const foundPaths = new Set();
+
+  let parentDepth = 0;
+  let dir = path.resolve(workspacePath);
+  for (; parentDepth <= 3; parentDepth++) {
+    if (visited.has(dir)) break;
+    visited.add(dir);
+
+    // 在当前 dir 下广度优先扫 2 层
+    const queue = [{ cur: dir, depth: 0 }];
+    const scannedDirs = new Set();
+
+    while (queue.length > 0) {
+      const { cur, depth } = queue.shift();
+      if (depth > 2) continue;
+      if (scannedDirs.has(cur)) continue;
+      scannedDirs.add(cur);
+
+      let entries;
+      try { entries = fs.readdirSync(cur, { withFileTypes: true }); } catch { continue; }
+
+      for (const e of entries) {
+        if (!e.isDirectory()) continue;
+        if (e.name.startsWith('.') && e.name !== '.recall-vault') continue;
+
+        const sub = path.join(cur, e.name);
+        if (sub === workspacePath) continue; // 排除自身
+        if (foundPaths.has(sub)) continue;
+
+        const contextPath = path.join(sub, '.recall-vault', 'context.md');
+        if (fs.existsSync(contextPath)) {
+          foundPaths.add(sub);
+          const pid = path.basename(sub).toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+          neighbors.push({
+            project_id: pid,
+            name: path.basename(sub),
+            rel_path: path.relative(workspacePath, contextPath).replace(/\\/g, '/'),
+            abs_path: contextPath,
+            distance: parentDepth + depth,
+            has_context: true,
+          });
+        } else {
+          // 只向下扫一层非 .recall-vault 目录
+          if (depth < 2 && !e.name.startsWith('node_modules') && !e.name.startsWith('.git')) {
+            queue.push({ cur: sub, depth: depth + 1 });
+          }
+        }
+      }
+    }
+
+    // 上一层
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  // 去重 + 按 distance 排序 + 取前 8 个
+  const unique = neighbors
+    .sort((a, b) => a.distance - b.distance)
+    .filter((n, i, arr) => arr.findIndex((x) => x.abs_path === n.abs_path) === i)
+    .slice(0, 8);
+
+  return unique;
+}
+
+/** 读 vault 里某个邻居项目的 snapshot 摘要（用于 cross-refs 里的一行描述） */
+function peekNeighborSummary(vaultRoot, neighborPid) {
+  const snapshotDir = path.join(vaultRoot, 'projects', neighborPid, '_snapshot');
+  if (!fs.existsSync(snapshotDir)) return null;
+
+  const projectFp = path.join(snapshotDir, 'project.md');
+  if (!fs.existsSync(projectFp)) return null;
+  const content = fs.readFileSync(projectFp, 'utf-8');
+  if (isTemplateBody(content)) return null;
+
+  // 取第一行非空非模板文本
+  for (const line of content.split('\n')) {
+    const t = line.trim();
+    if (!t || t.startsWith('#') || t.includes('<!--') || t.includes('[ ]') || t.includes('[x]')) continue;
+    return t.slice(0, 60);
+  }
+  return null;
+}
+
+/** 生成完整 context.md（比 additionalContext 更丰富，写磁盘）
+ *
+ * 结构：
+ *   # {project} — RecallVault 上下文
+ *   > 同步时间 + vault 路径
+ *
+ *   ## 📋 项目画像          ← snapshot 四个文件的摘要
+ *   ## 🔥 关键记忆 (Top 5)   ← semantic + episodic，带 wikilink
+ *   ## 🔗 关联项目           ← 邻居项目列表
+ *   ## 📖 记忆索引           ← 全部记忆清单
+ *   ## ⚠️ 待完成             ← 未决项
+ */
+function buildFullContextMd(vaultRoot, workspacePath, pid, snapshot, bundle, neighbors) {
+  const now = new Date();
+  const nowStr = now.toISOString().replace('T', ' ').slice(0, 19);
+  const projName = path.basename(workspacePath);
+  const vaultProjDir = path.join(vaultRoot, 'projects', pid);
+
+  const lines = [];
+  lines.push(`# ${projName} — RecallVault 上下文`);
+  lines.push(`> 同步: ${nowStr}  |  Vault: \`${vaultProjDir.replace(/\\/g, '/')}\``);
+  lines.push(`> **这是磁盘上的真实文件，任何 IDE 的 agent 都可以直接 ReadFile**`);
+  lines.push('');
+
+  // === 1. 项目画像 ===
+  lines.push('## 📋 项目画像');
+  if (snapshot) {
+    lines.push(snapshot.text);
+  } else {
+    lines.push('_（未填写快照，建议在 vault 的 `_snapshot/` 下创建 project.md / stack.md / architecture.md / conventions.md）_');
+  }
+  lines.push('');
+
+  // === 2. 关键记忆 Top 5 ===
+  lines.push('## 🔥 关键记忆');
+  const allMd = collectMdFiles(vaultRoot);
+  const entries = [];
+  for (const fp of allMd) {
+    try {
+      const raw = fs.readFileSync(fp, 'utf-8');
+      const { meta, body } = parseFrontmatter(raw);
+      if (!isRelevantProject(fp, vaultRoot, pid, meta, body)) continue;
+      if (meta.archived || meta.valid_to || !meta.id) continue;
+      const type = meta.memory_type || 'semantic';
+      if (type === 'episodic') continue;
+
+      const stat = fs.statSync(fp);
+      entries.push({
+        id: meta.id,
+        title: extractTitle(body),
+        snippet: body.replace(/\s+/g, ' ').trim().slice(0, 120),
+        priority: meta.priority || 2,
+        tags: (meta.tags || []).slice(0, 3).join(' '),
+        updated_at: meta.updated_at || meta.created_at || stat.mtime.toISOString(),
+        fp: fp.replace(/\\/g, '/'),
+      });
+    } catch { /* skip */ }
+  }
+  entries.sort((a, b) => {
+    if (b.priority !== a.priority) return b.priority - a.priority;
+    return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+  });
+  const top5 = entries.slice(0, 5);
+  if (top5.length > 0) {
+    for (const e of top5) {
+      const star = e.priority === 3 ? '⚠️ ' : '';
+      lines.push(`- ${star}**${e.title.slice(0, 60)}** (${ageLabel(e.updated_at)})`);
+      if (e.tags) lines.push(`  - #${e.tags.replace(/ /g, ' #')}`);
+      lines.push(`  - ${e.snippet}${e.snippet.length >= 120 ? '…' : ''}`);
+      lines.push(`  - 📎 \`${e.fp}\``);
+      lines.push('');
+    }
+  } else {
+    lines.push('_（暂无记忆）_');
+    lines.push('');
+  }
+
+  // === 3. 关联项目 ===
+  lines.push('## 🔗 关联项目');
+  if (neighbors.length > 0) {
+    for (const n of neighbors) {
+      const summary = peekNeighborSummary(vaultRoot, n.project_id);
+      const desc = summary ? ` — ${summary}` : '';
+      lines.push(`- **${n.name}** → \`${n.rel_path}\`${desc}`);
+    }
+  } else {
+    lines.push('_（未发现邻居项目 — 把多个项目放在同一个祖先目录下会自动发现）_');
+  }
+  lines.push('');
+  lines.push('> 💡 跨项目读取: `ReadFile("../{neighbor}/.recall-vault/context.md")` 即可拿到邻居的完整上下文。');
+  lines.push('');
+
+  // === 4. 记忆索引 ===
+  lines.push('## 📖 记忆索引');
+  let idx = 1;
+  for (const e of entries.slice(0, 20)) {
+    lines.push(`${idx}. **${e.title.slice(0, 50)}** — ${ageLabel(e.updated_at)} — \`${e.id}\``);
+    idx++;
+  }
+  const episodicFiles = allMd
+    .filter((fp) => {
+      try {
+        const raw = fs.readFileSync(fp, 'utf-8');
+        const { meta } = parseFrontmatter(raw);
+        if (!isRelevantProject(fp, vaultRoot, pid, meta, body)) return false;
+        return meta.memory_type === 'episodic' && !meta.valid_to && !meta.archived;
+      } catch { return false; }
+    })
+    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+  if (episodicFiles.length > 0) {
+    lines.push('');
+    lines.push('**上 session 摘要:**');
+    try {
+      const latest = fs.readFileSync(episodicFiles[0], 'utf-8');
+      const { body } = parseFrontmatter(latest);
+      lines.push(body.replace(/\s+/g, ' ').trim().slice(0, 200));
+    } catch { /* skip */ }
+  }
+  lines.push('');
+
+  // === 5. 使用指引 ===
+  lines.push('---');
+  lines.push('');
+  lines.push('### Agent 使用指引');
+  lines.push('');
+  lines.push('1. **开始工作前**: 已经在看这个文件了 ✅');
+  lines.push('2. **需要更精确搜索**: `recall({ query: "关键词", include_shared: true, limit: 5 })`');
+  lines.push('3. **完成重要决策**: `remember({ content: "决策内容", tags: ["architecture"] })`');
+  lines.push('4. **查看邻居项目**: `ReadFile("../{neighbor}/.recall-vault/context.md")`');
+  lines.push('5. **Session 结束前**: `session_end({ summary: "...", highlights: ["...", "..."] })`');
+
+  return lines.join('\n');
+}
+
+/** 写项目本地 .recall-vault/context.md + cross-refs.json */
+function writeProjectLocal(workspacePath, pid, contextMd, neighbors, vaultRoot) {
+  const localDir = path.join(workspacePath, '.recall-vault');
+  fs.mkdirSync(localDir, { recursive: true });
+
+  const contextPath = path.join(localDir, 'context.md');
+  fs.writeFileSync(contextPath, contextMd, 'utf-8');
+
+  // cross-refs.json
+  const crossRefs = {
+    self: {
+      project_id: pid,
+      context_path: '.recall-vault/context.md',
+      vault_project_dir: path.join(vaultRoot, 'projects', pid).replace(/\\/g, '/'),
+      last_sync: new Date().toISOString(),
+    },
+    neighbors: neighbors.map((n) => ({
+      project_id: n.project_id,
+      name: n.name,
+      rel_path: n.rel_path,
+      abs_path: n.abs_path.replace(/\\/g, '/'),
+      distance: n.distance,
+      has_context: n.has_context,
+    })),
+  };
+  fs.writeFileSync(path.join(localDir, 'cross-refs.json'), JSON.stringify(crossRefs, null, 2), 'utf-8');
+
+  // 生成 .gitignore 建议
+  const gitignorePath = path.join(localDir, '.gitignore');
+  if (!fs.existsSync(gitignorePath)) {
+    fs.writeFileSync(gitignorePath, '# RecallVault 自动生成的同步目录\n# 建议提交 context.md（项目画像和跨项目引用）\n# 但不要提交 debug 日志或临时缓存\n_logs/\ncache/\n', 'utf-8');
+  }
+
+  return { contextPath, neighborCount: neighbors.length };
+}
+
 // === 主流程 ===
 try {
   const vaultRoot = resolveVaultRoot();
   const projectId = inferProjectId(cwd, vaultRoot);
 
-  // 1. 先拿快照（固定结构，优先级最高）
+  // 1. 快照
   const snapshot = buildSnapshotSummary(vaultRoot, projectId);
 
-  // 2. 再拿 semantic/episodic 记忆
+  // 2. 记忆 bundle
   const bundle = buildCompressedSummary(vaultRoot, projectId);
 
+  // 3. 邻居项目发现
+  const neighbors = discoverNeighbors(cwd, vaultRoot);
+
+  // 4. 生成完整 context.md（写磁盘）
+  let localWriteResult = null;
+  try {
+    const contextMd = buildFullContextMd(vaultRoot, cwd, projectId, snapshot, bundle, neighbors);
+    localWriteResult = writeProjectLocal(cwd, projectId, contextMd, neighbors, vaultRoot);
+  } catch (localErr) {
+    // 本地写入失败不影响 additionalContext（可能是 workspace 权限）
+    process.stderr.write(`[RecallVault] ⚠️ 本地 context.md 写入失败: ${localErr.message}\n`);
+  }
+
+  // 5. 生成 additionalContext（hook 注入用，保持原逻辑）
   let context;
   const sections = [];
 
@@ -341,10 +704,15 @@ try {
     sections.push(bundle.text);
   }
 
+  // 跨项目提示
+  if (localWriteResult && localWriteResult.neighborCount > 0) {
+    const neighborNames = neighbors.slice(0, 3).map((n) => n.name).join(', ');
+    sections.push(`🔗 发现 ${localWriteResult.neighborCount} 个邻居项目（${neighborNames}${localWriteResult.neighborCount > 3 ? ' ...' : ''}）。读 \`.recall-vault/context.md\` 里的 cross-refs 获取路径。`);
+  }
+
   if (sections.length > 0) {
-    context = `[RecallVault SessionStart Hook] 新 session 开始，已准备上下文：\n${sections.join('\n')}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n使用建议：\n1. 项目画像（如果有）是确定性快照，直接作为工作基准。\n2. 高价值记忆是最近的关键决策。\n3. 需要更精确的搜索时调 recall({ query: "关键词", include_shared: true, limit: 5 })。\n4. 完成工作后主动调 remember 沉淀决策和发现。`;
+    context = `[RecallVault SessionStart Hook] 新 session 开始，已准备上下文：\n${sections.join('\n')}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n使用建议：\n1. 📂 **项目本地 \`.recall-vault/context.md\` 已生成** — 任何 IDE 的 agent 都能 ReadFile，跨 IDE/跨沙箱可用\n2. 项目画像（如果有）是确定性快照，直接作为工作基准\n3. 高价值记忆是最近的关键决策\n4. 需要更精确搜索时调 recall({ query: "关键词", include_shared: true, limit: 5 })\n5. 完成工作后主动调 remember 沉淀决策和发现`;
   } else {
-    // vault 是空的，给引导
     context = `[RecallVault SessionStart Hook] 新 session 开始。
 
 Vault 是空的 — 这是全新 start。记得在工作过程中主动 remember：
@@ -361,7 +729,9 @@ Vault 是空的 — 这是全新 start。记得在工作过程中主动 remember
 - architecture.md 分层、组件、依赖方向
 - conventions.md  命名约定、红线 R1-R10
 
-快照会在每次 session 开始时自动注入，不需要 recall 就能用。`;
+快照会在每次 session 开始时自动注入，不需要 recall 就能用。
+
+📂 提示：项目本地 \`.recall-vault/context.md\` 已创建 — 即使 MCP 断了也能 ReadFile 拿上下文。`;
   }
 
   process.stdout.write(
@@ -373,7 +743,6 @@ Vault 是空的 — 这是全新 start。记得在工作过程中主动 remember
     }),
   );
 } catch (err) {
-  // fail-safe：任何异常都输出引导文字
   process.stdout.write(
     JSON.stringify({
       hookSpecificOutput: {

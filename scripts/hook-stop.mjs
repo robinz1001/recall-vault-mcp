@@ -18,6 +18,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { syncContextMd } from './context-writer.mjs';
 
 const cwd = process.env.TRAE_PROJECT_DIR || process.env.CODEBUDDY_PROJECT_DIR || process.env.CLAUDE_PROJECT_DIR || process.env.CODEX_PROJECT_DIR || process.env.WINDSURF_PROJECT_DIR || process.env.OPENCODE_PROJECT_DIR || process.cwd();
 const markerFile = path.join(cwd, 'agent-state', 'activity.json');
@@ -75,6 +76,14 @@ if (worthy.length > 0) {
   const ageMin = Math.round((Date.now() - new Date(top.ts).getTime()) / 60000);
   const hint = `[RecallVault Stop Hook] 📝 有 ${worthy.length} 个值得保存的产出（最近：${typeLabel} · ${ageMin}分钟前 · priority=${top.priority}）。如果 recall-vault MCP 可用，可以在下次 session 用 session_start 恢复上下文，或手动 remember。`;
 
+  // 🔴 Session 结束强制刷新 context.md（跳过 throttle）
+  try {
+    const refreshResult = syncContextMd(cwd);
+    if (refreshResult?.ok) {
+      hint += `\n[同步] context.md 已更新（${refreshResult.byteSize} 字节，${refreshResult.neighborCount} 个邻居项目）`;
+    }
+  } catch { /* 静默失败，不影响 Stop hook */ }
+
   process.stdout.write(JSON.stringify({
     continue: true,  // 关键：永远不阻断
     hookSpecificOutput: {
@@ -83,5 +92,7 @@ if (worthy.length > 0) {
     },
   }));
 } else {
+  // 🔴 即使没有值得保存的产出，也刷新一次（确保 context.md 反映最新状态）
+  try { syncContextMd(cwd); } catch { /* 静默 */ }
   process.stdout.write(JSON.stringify({ continue: true }));
 }
