@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { syncContextMd } from './context-writer.mjs';
 
-const cwd = process.env.TRAE_PROJECT_DIR || process.env.CODEBUDDY_PROJECT_DIR || process.env.CLAUDE_PROJECT_DIR || process.env.CODEX_PROJECT_DIR || process.env.WINDSURF_PROJECT_DIR || process.env.OPENCODE_PROJECT_DIR || process.cwd();
+const cwd = process.env.TRAE_PROJECT_DIR || process.env.CODEBUDDY_PROJECT_DIR || process.env.CLAUDE_PROJECT_DIR || process.env.CODEX_PROJECT_DIR || process.env.WINDSURF_PROJECT_DIR || process.env.OPENCODE_PROJECT_DIR || process.env.CODEARTS_PROJECT_DIR || process.env.CODEARTSDOER_PROJECT_DIR || process.cwd();
 const stateDir = path.join(cwd, 'agent-state');
 const markerFile = path.join(stateDir, 'activity.json');
 const vaultMdPattern = /[\\/](projects|shared)[\\/].*\.md$/; // vault 内的 md 文件路径特征

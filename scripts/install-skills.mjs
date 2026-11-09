@@ -10,6 +10,8 @@
  *   ✅ Trae CN      — skill + ~/.trae-cn/hooks.json + %APPDATA%\Trae CN\User\mcp.json
  *   ✅ Trae (intl)  — skill + ~/.trae/hooks.json + %APPDATA%\Trae\User\mcp.json
  *   ✅ CodeBuddy    — skill + ~/.codebuddy/settings.json hooks + ~/.codebuddy/.mcp.json
+ *   ✅ 华为云码道 (CodeArts Doer) — skill + mcp_settings.json + JS 插件
+ *   ✅ Claude Code  — skill + settings.json hooks + ~/.claude/settings.json
  *   ✅ Claude Code  — skill + ~/.claude/settings.json (hooks + MCP，已经是用户级)
  *   ✅ Codex        — skill + ~/.codex/config.toml MCP
  *   ✅ Windsurf     — skill + ~/.windsurf/hooks.json + ~/.codeium/windsurf/mcp_config.json
@@ -251,6 +253,30 @@ function installCodeBuddy() {
   console.log('✅ CodeBuddy: skill + ~/.codebuddy/.mcp.json + ~/.codebuddy/settings.json');
 }
 
+// ── 华为云码道代码智能体 (CodeArts) ────────────────────────────────────────
+
+function installCodeArtsDoer() {
+  // Skill: ~/.codeartsdoer/skill/recall-vault/
+  copySkill(join(homedir, '.codeartsdoer', 'skill', 'recall-vault'));
+
+  // 全局 MCP: ~/.codeartsdoer/mcp_settings.json
+  const mcpFile = join(homedir, '.codeartsdoer', 'mcp_settings.json');
+  const existing = readJson(mcpFile);
+  writeJson(mcpFile, mergeMcpServers(existing, MCP_CONFIG));
+
+  // CodeArts 不用 shell hooks，用 JS/TS 插件
+  // 把插件复制到 %USERPROFILE%/.codeartsdoer/plugin/
+  const pluginSrc = join(__dirname, 'ide-configs', 'codeartsdoer-plugin', 'recallVaultPlugin.js');
+  const pluginDstDir = join(homedir, '.codeartsdoer', 'plugin');
+  ensureDir(pluginDstDir);
+  const pluginDst = join(pluginDstDir, 'recallVaultPlugin.js');
+  if (existsSync(pluginSrc)) {
+    copyFileSync(pluginSrc, pluginDst);
+  }
+
+  console.log('✅ CodeArts Doer: skill + ~/.codeartsdoer/mcp_settings.json + plugin');
+}
+
 // ── Claude Code ────────────────────────────────────────────────────────────
 
 function installClaudeCode() {
@@ -389,6 +415,8 @@ const IDES = {
   trae: installTrae,
   'trae-cn': installTraeCN,
   codebuddy: installCodeBuddy,
+  codeartsdoer: installCodeArtsDoer,
+  'codearts-doer': installCodeArtsDoer,
   'claude-code': installClaudeCode,
   codex: installCodex,
   windsurf: installWindsurf,
