@@ -256,13 +256,27 @@ function installCodeBuddy() {
 // ── 华为云码道代码智能体 (CodeArts) ────────────────────────────────────────
 
 function installCodeArtsDoer() {
-  // Skill: ~/.codeartsdoer/skill/recall-vault/
-  copySkill(join(homedir, '.codeartsdoer', 'skill', 'recall-vault'));
+  // Skill: ~/.codeartsdoer/cache/user/skills/recall-vault/  (CodeArts 实际读的路径)
+  copySkill(join(homedir, '.codeartsdoer', 'cache', 'user', 'skills', 'recall-vault'));
 
-  // 全局 MCP: ~/.codeartsdoer/mcp_settings.json
+  // IDE 模式 MCP: ~/.codeartsdoer/mcp_settings.json
   const mcpFile = join(homedir, '.codeartsdoer', 'mcp_settings.json');
   const existing = readJson(mcpFile);
   writeJson(mcpFile, mergeMcpServers(existing, MCP_CONFIG));
+
+  // CLI 模式 MCP: ~/.codeartsdoer/codearts_cli.jsonc
+  // CodeArts CLI 用 OpenCode config 格式，MCP 在 "mcp" 字段下（不是 mcpServers）
+  const cliFile = join(homedir, '.codeartsdoer', 'codearts_cli.jsonc');
+  let cliCfg;
+  try { cliCfg = JSON.parse(readFileSync(cliFile, 'utf-8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '').trim()); } catch { cliCfg = {}; }
+  cliCfg.mcp = cliCfg.mcp || {};
+  cliCfg.mcp['recall-vault'] = {
+    type: 'local',
+    command: ['npx', '-y', 'recall-vault-mcp'],
+    enabled: true,
+  };
+  cliCfg['$schema'] = cliCfg['$schema'] || 'https://opencode.ai/config.json';
+  writeFileSync(cliFile, JSON.stringify(cliCfg, null, 2) + '\n', 'utf-8');
 
   // CodeArts 不用 shell hooks，用 JS/TS 插件
   // 把插件复制到 %USERPROFILE%/.codeartsdoer/plugin/
@@ -274,7 +288,7 @@ function installCodeArtsDoer() {
     copyFileSync(pluginSrc, pluginDst);
   }
 
-  console.log('✅ CodeArts Doer: skill + ~/.codeartsdoer/mcp_settings.json + plugin');
+  console.log('✅ CodeArts Doer: skill + mcp_settings.json + codearts_cli.jsonc + plugin');
 }
 
 // ── Claude Code ────────────────────────────────────────────────────────────
