@@ -284,8 +284,9 @@ function findCodeArtsProjects() {
 }
 
 function installCodeArtsDoer() {
-  // Skill: ~/.codeartsdoer/cache/user/skills/recall-vault/
-  copySkill(join(homedir, '.codeartsdoer', 'cache', 'user', 'skills', 'recall-vault'));
+  // Skill: ~/.codeartsdoer/skills/recall-vault/  (CodeArts 设置页底部提示的路径)
+  // 注意：CodeArts 运行时可能锁住此目录 — 必须完全退出 CodeArts 后再执行
+  copySkill(join(homedir, '.codeartsdoer', 'skills', 'recall-vault'));
 
   // IDE 模式 MCP: 用户级 ~/.codeartsdoer/mcp_settings.json
   const userMcp = join(homedir, '.codeartsdoer', 'mcp_settings.json');
