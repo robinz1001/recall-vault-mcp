@@ -40,16 +40,24 @@ You are recall-vault's runtime agent. **You are the protagonist. MCP is storage.
 
 ### 0. Always pass project_id (non-negotiable)
 
-**IDE 不把当前工作区路径传给 MCP server** —— Trae/CodeBuddy 的 MCP config 有固定 cwd，不管你打开哪个项目 cwd 都一样。MCP 的 \`inferProjectId()\` 可能返回错误的项目名。
+**⚠️ IF YOU DON'T PASS project_id TO recall, IT WILL RETURN ALL MEMORIES FROM ALL PROJECTS + SHARED — including tournament-master, other projects' content, etc. This is a privacy/context pollution risk.**
 
-**YOU KNOW WHAT PROJECT YOU ARE IN.** Every tool call that takes \`project_id\` (session_start, remember, recall, session_end, list_memories, archive_memory, update_memory, delete_memory, set_memory_priority) **MUST** include it. Derive it from the workspace folder you're working in.
+Every tool call that takes \`project_id\` (session_start, remember, recall, session_end, list_memories, archive_memory, update_memory, delete_memory, set_memory_priority) **MUST** include it.
 
+**Prefer workspace_path** — it auto-infers project_id AND ensures the right project is targeted:
 \`\`\`
-const PROJECT_ID = path.basename(workspace_folder);  // or: git rev-parse --show-toplevel
-session_start({ project_id: PROJECT_ID });
-remember({ content: "...", project_id: PROJECT_ID });
+recall({ query: "启动性能", workspace_path: "/path/to/your/project" });
+remember({ content: "发现了 bug", workspace_path: "/path/to/your/project" });
+session_start({ workspace_path: "/path/to/your/project" });
+\`\`\`
+
+Fallback (if workspace_path unavailable):
+\`\`\`
+const PROJECT_ID = basename(current_workspace_folder);
 recall({ query: "...", project_id: PROJECT_ID });
 \`\`\`
+
+include_shared defaults to true — shared layer (cross-project knowledge) is always included, which is usually what you want. Set \`include_shared: false\` only when you explicitly don't want cross-project memories.
 
 ### 1. Search BEFORE Grep (most fundamental)
 
@@ -140,6 +148,8 @@ const _require = createRequire(import.meta.url);
 const _pkg = _require('../package.json');
 
 export function createServer(): McpServer {
+  // MCP server 启动时设 cwd 环境变量 → recall.ts 可以 fallback 推断 project_id
+  process.env.RECALL_VAULT_PROJECT_ROOT = process.cwd();
   const server = new McpServer(
     { name: 'recall-vault', version: _pkg.version },
     { instructions: SERVER_INSTRUCTIONS },

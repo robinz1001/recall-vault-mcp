@@ -1,5 +1,5 @@
 # recall-vault — RecallVault 上下文
-> 同步: 2026-11-12 03:09:05  |  Vault: `C:/Users/robin/.recall-vault/projects/recall-vault`
+> 同步: 2026-11-12 03:32:55  |  Vault: `C:/Users/robin/.recall-vault/projects/recall-vault`
 > **这是磁盘上的真实文件，任何 IDE 的 agent 都可以直接 ReadFile**
 
 ## 📋 项目画像

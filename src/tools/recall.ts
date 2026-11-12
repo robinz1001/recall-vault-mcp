@@ -101,10 +101,20 @@ export async function recall(args: RecallArgs): Promise<RecallResult> {
   const sortBy: RecallSortBy = args.sort_by ?? 'relevance';
 
   // workspace_path → 推断 project_id（如果没显式传 project_id）
-  const resolvedProjectId = args.project_id ?? (args.workspace_path ? vault.inferProjectId(args.workspace_path) : undefined);
+  // 三级 fallback: agent 显式传 → workspace_path 推断 → MCP server 启动时的 cwd → process.cwd()
+  let resolvedProjectId = args.project_id;
+  if (!resolvedProjectId && args.workspace_path) {
+    resolvedProjectId = vault.inferProjectId(args.workspace_path);
+  }
+  if (!resolvedProjectId) {
+    // MCP server 启动时设的 cwd（CodeArts/Trae spawn 时会设 cwd 为项目目录）
+    const serverCwd = process.env.RECALL_VAULT_PROJECT_ROOT;
+    resolvedProjectId = serverCwd ? vault.inferProjectId(serverCwd) : vault.inferProjectId(process.cwd());
+    logger.debug('Recall: fallback project_id from cwd →', resolvedProjectId);
+  }
   const resolvedArgs: RecallArgs = resolvedProjectId !== undefined
-    ? { ...args, project_id: resolvedProjectId }
-    : args;
+    ? { ...args, project_id: resolvedProjectId, include_shared: args.include_shared ?? true }  // 默认 include shared
+    : { ...args, include_shared: args.include_shared ?? true };
 
   // === Step 1: 确定搜索范围 ===
   const searchDirs = await buildSearchDirs(vault, resolvedArgs);
