@@ -255,8 +255,8 @@ function installCodeBuddy() {
 
 // ── 华为云码道代码智能体 (CodeArts) ────────────────────────────────────────
 
-function findCodeArtsProjects(maxScanDirs = 30) {
-  // 扫描常见项目位置下的 .codeartsdoer/mcp/mcp_settings.json
+function findCodeArtsProjects() {
+  // 递归扫描常见项目位置，找 {project}/.codeartsdoer/mcp/mcp_settings.json
   const roots = [
     join(homedir, 'source'),
     join(homedir, 'Documents'),
@@ -264,16 +264,22 @@ function findCodeArtsProjects(maxScanDirs = 30) {
     join(homedir, 'Projects'),
   ];
   const found = [];
-  for (const root of roots) {
-    if (!existsSync(root)) continue;
-    try {
-      const dirs = readdirSync(root, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => join(root, d.name));
-      for (const dir of dirs) {
-        const projMcp = join(dir, '.codeartsdoer', 'mcp', 'mcp_settings.json');
-        if (existsSync(projMcp)) found.push(projMcp);
+  function walk(dir, depth = 0) {
+    if (depth > 4) return;
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name === 'node_modules' || e.name === '.git' || e.name === '.next') continue;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) {
+        // 直接检查这个目录是不是有 .codeartsdoer
+        const candidate = join(p, '.codeartsdoer', 'mcp', 'mcp_settings.json');
+        if (existsSync(candidate)) { found.push(candidate); continue; }
+        walk(p, depth + 1);
       }
-    } catch { /* permission */ }
+    }
   }
+  for (const root of roots) { if (existsSync(root)) walk(root); }
   return found;
 }
 
